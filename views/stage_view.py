@@ -13,6 +13,7 @@ Reutiliza la lógica del escritorio sin cambios:
 from __future__ import annotations
 from typing import Callable
 import asyncio
+import time
 import flet as ft
 
 from models.song import Song, Line, Syllable
@@ -225,7 +226,9 @@ class StageScreen:
                  on_edit_lyrics: Callable[[int], None] | None = None,
                  on_present: Callable | None = None,
                  on_persist_key: Callable | None = None,
-                 on_offset_change: Callable[[int], None] | None = None) -> None:
+                 on_offset_change: Callable[[int], None] | None = None,
+                 size: int = theme.SIZE_STAGE,
+                 on_size_change: Callable[[int], None] | None = None) -> None:
         self.page = page
         self.song = song
         self.on_back = on_back
@@ -244,7 +247,11 @@ class StageScreen:
         # (no toca la canción original). Firma: (offset) -> None.
         self.on_offset_change = on_offset_change
         self.offset = initial_offset        # tono de la lista, si viene de una
-        self.size = theme.SIZE_STAGE
+        # Tamaño del texto: este es el ÚNICO lugar donde se ajusta (botón «Aa»); el
+        # escenario lo hereda al abrirse. ``on_size_change`` lo persiste en las
+        # preferencias (lo inyecta ``main``); sin él, el cambio dura la sesión.
+        self.size = size
+        self.on_size_change = on_size_change
         self._swipe_dx = 0.0                # distancia acumulada del arrastre lateral
         # Los botones flotan a la derecha en columna (van en un Stack): 3 botones de
         # 60 + 2×12 de espacio + 24 de margen ≈ 228. El hueco inferior deja que la
@@ -326,7 +333,8 @@ class StageScreen:
             botones.append(self._fab(
                 ft.Icon(ft.Icons.PLAY_ARROW, size=30, color=theme.THEME["bg"]),
                 "Modo escenario",
-                lambda _e: self.on_present(self.song, self.offset),
+                # Se le pasa el tamaño actual: el escenario hereda la fuente de aquí.
+                lambda _e: self.on_present(self.song, self.offset, self.size),
                 bgcolor=theme.THEME["accent"], border=theme.THEME["accent"]))
         return ft.Container(
             right=16, bottom=24,
@@ -478,6 +486,8 @@ class StageScreen:
             self._size_text.value = str(self.size)
             _safe_update(self._size_text)
         self._refresh()
+        if self.on_size_change is not None:
+            self.on_size_change(self.size)     # lo guarda en preferencias
 
     def _nav_pill(self, text: str, cb, enabled: bool) -> ft.Control:
         """‹ Anterior / Siguiente › encerrado en una píldora (como «+ Puente»)."""
@@ -553,6 +563,13 @@ _SWIPE_MIN = 55
 # («2 de 5») sin apretarse.
 _HEADER_H = 76
 
+# Alto FIJO del panel de control inferior, con el mismo criterio que _HEADER_H:
+# flota sobre el cuerpo y este reserva su alto con el padding inferior. Tiene dos
+# valores porque el panel crece una fila cuando la canción trae metrónomo.
+_PANEL_H = 60          # solo la fila de velocidad (play + slider)
+_PANEL_H_METRO = 100   # velocidad + metrónomo
+_PANEL_MARGIN = 10     # margen inferior del panel (ver _panel)
+
 # Autoscroll. La velocidad se mide en **píxeles por segundo**, no en píxeles por
 # tick: así el slider significa lo mismo aunque cambie la cadencia del bucle.
 _TICK = 0.1                  # segundos entre pasos
@@ -560,10 +577,21 @@ _SPEED_MIN = 4.0             # px/s: apenas se mueve
 _SPEED_MAX = 90.0            # px/s
 _SPEED_DEFAULT = 18.0
 
+# Cuánto sigue mandando el usuario tras su último movimiento. El turno CADUCA solo:
+# cada movimiento suyo lo renueva, y si deja de mover, el autoscroll retoma. Así el
+# mecanismo no depende de recibir un evento final (que el límite de ``scroll_interval``
+# puede descartar) y es imposible que el autoscroll se quede colgado cediendo.
+# Debe superar con holgura el intervalo entre eventos de scroll (50 ms).
+_USER_GRACE = 0.25           # segundos
+
 
 class PresentScreen:
     """Modo escenario: SOLO la canción (limpio, sin barra de herramientas), con
-    control de tamaño de fuente y **autoscroll** (play/pausa + velocidad).
+    **autoscroll** (play/pausa + velocidad) y el metrónomo si la canción trae BPM.
+
+    El tamaño del texto se hereda de la vista de canción (parámetro ``size``, que
+    viene de su botón «Aa»): aquí no se edita, para tener un solo lugar donde se
+    ajusta la fuente.
 
     En temas oscuros el fondo es **negro puro** (no el del tema); en claros, el
     fondo del tema (ver ``_stage_bg``)."""
@@ -572,7 +600,8 @@ class PresentScreen:
                  on_exit: Callable[[], None],
                  on_prev: Callable[[], None] | None = None,
                  on_next: Callable[[], None] | None = None,
-                 position_label: str = "") -> None:
+                 position_label: str = "",
+                 size: int = theme.SIZE_STAGE) -> None:
         self.page = page
         self.song = song
         self.offset = offset          # tono con el que se venía viendo
@@ -584,28 +613,31 @@ class PresentScreen:
         self._header_box: ft.Control | None = None
         self._panel_box: ft.Control | None = None
         self._swipe_dx = 0.0          # distancia acumulada del arrastre lateral
-        self.size = 14                # tamaño inicial (rango permitido 12–64)
+        # Tamaño heredado de la vista de canción (su botón «Aa»): aquí no se edita.
+        self.size = size
         self._speed = _SPEED_DEFAULT  # píxeles por segundo
         self._playing = False
         self._running = False         # evita lanzar dos bucles a la vez
         self._pixels = 0.0            # posición real del scroll (la reporta on_scroll)
-        self._pending_anchor = 0.0    # posición a restaurar tras ocultar/mostrar el chrome
+        self._user_hold = 0.0         # hasta cuándo manda el usuario (ver _user_moving)
         self._max_extent: float | None = None   # None = aún no la sabemos
-        # El panel es fijo y no se puede ocultar: el hueco de abajo deja que la
-        # última línea de la canción suba por encima de él al hacer scroll.
-        # El espacio superior reserva el alto del panel del título (que flota encima):
-        # así el título no empuja la letra y ocultarlo no la mueve.
+        # Metrónomo: solo existe si la canción trae un BPM válido. Sin BPM, ningún
+        # atributo de metrónomo se crea (renderizado condicional real, no disabled).
+        # Se resuelve ANTES del cuerpo porque el alto del panel (y por tanto el
+        # espacio que el cuerpo le reserva abajo) depende de si lleva metrónomo.
+        self._bpm = valid_bpm(song.bpm)
+        self._metro_toggle: ft.Control | None = None   # casilla ▶/■ del panel
+        # El título y el panel FLOTAN sobre el cuerpo; este reserva el alto de cada
+        # uno con su padding. Así ocultarlos no redimensiona el cuerpo (la letra no
+        # brinca) y, en pantalla completa, la última línea puede subir por encima de
+        # donde vive el panel en vez de quedar pegada al borde.
         self._body = ft.ListView(
             expand=True, spacing=2, on_scroll=self._on_scroll, scroll_interval=50,
-            padding=ft.Padding.only(left=16, right=16, top=_HEADER_H + 6, bottom=28))
+            padding=ft.Padding.only(left=16, right=16, top=_HEADER_H + 6,
+                                    bottom=self._panel_space() + 6))
         self._play_box = ft.Container(
             content=self._play_icon(), on_click=self._toggle_play,
             ink=True, padding=8, border_radius=20)
-        self._size_text: ft.Text | None = None
-        # Metrónomo: solo existe si la canción trae un BPM válido. Sin BPM, ningún
-        # atributo de metrónomo se crea (renderizado condicional real, no disabled).
-        self._bpm = valid_bpm(song.bpm)
-        self._metro_toggle: ft.Control | None = None   # casilla ▶/■ del panel
         if self._bpm is not None:
             self._metro = Metronome(self._bpm, self._on_metro_beat,
                                     beats=beats_per_measure(song.rhythm))
@@ -616,6 +648,14 @@ class PresentScreen:
                 border=ft.Border.all(1, theme.THEME["border"]))
             self._metro_text = ft.Text(str(self._bpm), size=15,
                                        weight=ft.FontWeight.BOLD, color=theme.THEME["text"])
+
+    def _panel_h(self) -> int:
+        """Alto fijo del panel inferior; crece una fila si hay metrónomo."""
+        return _PANEL_H_METRO if self._bpm is not None else _PANEL_H
+
+    def _panel_space(self) -> int:
+        """Espacio que el cuerpo reserva abajo: el panel más su margen."""
+        return self._panel_h() + _PANEL_MARGIN
 
     def _play_icon(self) -> ft.Control:
         """Ícono Material (el glifo ▶ se pintaba como emoji naranja en Android)."""
@@ -635,12 +675,13 @@ class PresentScreen:
             on_horizontal_drag_start=self._swipe_reset,
             on_horizontal_drag_update=self._swipe_track,
             on_horizontal_drag_end=self._on_swipe, content=self._body)
-        # El título FLOTA sobre el cuerpo (Stack) en vez de empujarlo: el cuerpo ya
-        # reserva su alto con el padding superior del ListView. Así, mostrarlo u
-        # ocultarlo NO redimensiona el cuerpo y la letra se queda quieta.
+        # Título y panel FLOTAN sobre el cuerpo (Stack) en vez de empujarlo: el
+        # cuerpo ocupa toda la pantalla y ya reserva el alto de ambos con su padding.
+        # Así, mostrarlos u ocultarlos NO lo redimensiona y la letra se queda quieta.
         return ft.Stack(expand=True, controls=[
-            ft.Column([cuerpo, self._panel_box], expand=True, spacing=0),
+            cuerpo,
             ft.Container(top=0, left=0, right=0, content=self._header_box),
+            ft.Container(bottom=0, left=0, right=0, content=self._panel_box),
         ])
 
     def _nav_button(self, icon: str, cb, show: bool) -> ft.Control:
@@ -696,32 +737,21 @@ class PresentScreen:
         )
 
     def _toggle_panel(self, _e=None) -> None:
-        # Oculta/muestra header y panel a la vez: al ocultarlos, su espacio lo gana
-        # el cuerpo (pantalla completa con solo letra y acordes).
+        # Oculta/muestra título y panel a la vez (pantalla completa con solo letra y
+        # acordes). Ambos flotan, así que esto NO redimensiona el cuerpo: su espacio
+        # ya está reservado y la letra no se mueve.
         self._chrome_visible = not self._chrome_visible
-        # Guardar la posición ANTES del re-layout: al cambiar el tamaño del cuerpo,
-        # el ListView pierde su scroll y brinca a 0. Se captura aquí (y no en
-        # _reanchor) porque el reset dispara un on_scroll(0) que podría pisar
-        # _pixels antes de que la corrutina llegue a leerlo.
-        self._pending_anchor = self._pixels
+        # Solo se cambia la visibilidad: NUNCA se toca el scroll. Tocar la pantalla
+        # no debe mover la letra. (Hubo aquí un «reanclado» que forzaba el scroll a
+        # self._pixels tras el toggle; hacía falta cuando el chrome vivía en la
+        # Column y ocultarlo redimensionaba el cuerpo. Con el chrome flotando ya no
+        # hay re-layout, y además corría la pantalla: _pixels llega con retraso
+        # —on_scroll está limitado a 50 ms— así que al tocar durante la inercia
+        # devolvía la letra a una posición vieja.)
         for box in (self._header_box, self._panel_box):
             if box is not None:
                 box.visible = self._chrome_visible
                 _safe_update(box)
-        # Reanclar de inmediato (scroll instantáneo) para que el brinco a 0 no
-        # llegue a verse, en vez de esperar al siguiente tick del autoscroll.
-        self.page.run_task(self._reanchor)
-
-    async def _reanchor(self) -> None:
-        """Devuelve el scroll a donde iba, sin animación, tras ocultar/mostrar el
-        chrome. El cliente aplica primero el re-layout y luego este salto, así que
-        la posición correcta se restaura en el mismo frame."""
-        try:
-            await self._body.scroll_to(
-                offset=self._pending_anchor, duration=ft.Duration(milliseconds=0))
-        except Exception:
-            pass
-        self._pixels = self._pending_anchor
 
     def _swipe_reset(self, _e=None) -> None:
         self._swipe_dx = 0.0
@@ -739,11 +769,14 @@ class PresentScreen:
             self._go_prev()
 
     def _panel(self) -> ft.Control:
-        """Panel fijo con velocidad de scroll y tamaño de texto; la ✕ sale del escenario."""
+        """Panel fijo con la velocidad del autoscroll (y el metrónomo si la canción
+        trae BPM); la ✕ sale del escenario.
+
+        El tamaño del texto NO se edita aquí: se hereda de la vista de canción (su
+        botón «Aa»), que lo pasa al abrir el escenario. Así hay un solo lugar donde
+        se ajusta la fuente."""
         muted = theme.THEME["text_muted"]
         texto = theme.THEME["text"]
-        self._size_text = ft.Text(str(self.size), size=17, weight=ft.FontWeight.BOLD,
-                                  color=texto)
         # Tortuga/liebre no existen en Material: caminar y correr dicen lo mismo.
         velocidad = ft.Row(
             vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=6, controls=[
@@ -753,28 +786,7 @@ class PresentScreen:
                           expand=True, on_change=self._on_speed),
                 _slot(ft.Icon(ft.Icons.DIRECTIONS_RUN, size=18, color=muted)),
             ])
-        fuente = ft.Row(
-            vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=6, controls=[
-                # «Aa» alineado bajo el play: mismo ancho, mismo color, en negrita.
-                ft.Container(width=_PLAY_WIDTH, alignment=ft.Alignment.CENTER,
-                             content=ft.Text("Aa", size=15, weight=ft.FontWeight.BOLD,
-                                             color=texto)),
-                _slot(ft.Container(width=1, height=20, bgcolor=theme.THEME["border"])),
-                ft.Row(expand=True, alignment=ft.MainAxisAlignment.CENTER, spacing=10,
-                       vertical_alignment=ft.CrossAxisAlignment.CENTER, controls=[
-                           _circle_button("A−", lambda _e: self._resize(-2), diameter=40,
-                                          bgcolor=theme.THEME["surface2"]),
-                           self._size_text,
-                           _circle_button("A+", lambda _e: self._resize(2), diameter=40,
-                                          bgcolor=theme.THEME["surface2"]),
-                       ]),
-                # ROTATE_LEFT es la misma flecha circular que REFRESH pero invertida:
-                # apunta hacia atrás, que es lo que significa «volver al tamaño base».
-                _slot(ft.Icon(ft.Icons.ROTATE_LEFT, size=20, color=muted),
-                      on_click=lambda _e: self._reset_size(),
-                      tooltip="Restablecer el tamaño"),
-            ])
-        filas: list[ft.Control] = [velocidad, fuente]
+        filas: list[ft.Control] = [velocidad]
         if self._bpm is not None:
             self._metro_toggle = _slot(self._metro_icon(), on_click=self._toggle_metro,
                                        tooltip="Metrónomo")
@@ -799,14 +811,19 @@ class PresentScreen:
             filas.append(metronomo)
         return ft.Container(
             visible=self._chrome_visible,      # se oculta/muestra al tocar la pantalla
-            margin=ft.Margin.only(left=10, right=10, bottom=10),
+            # Alto FIJO (_panel_h): es el espacio que el cuerpo reserva abajo.
+            height=self._panel_h(),
+            margin=ft.Margin.only(left=10, right=10, bottom=_PANEL_MARGIN),
             padding=ft.Padding.only(left=8, right=4, top=4, bottom=4),
             bgcolor=theme.THEME["surface"], border_radius=24,
             border=ft.Border.all(1, theme.THEME["border"]),
             content=ft.Row(
                 vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=4, controls=[
                     ft.Column(filas, spacing=0, tight=True, expand=True),
-                    ft.Container(width=1, height=64, bgcolor=theme.THEME["border"]),
+                    # El divisor acompaña al alto real del panel: una fila (solo
+                    # velocidad) o dos (con metrónomo).
+                    ft.Container(width=1, height=64 if len(filas) > 1 else 40,
+                                 bgcolor=theme.THEME["border"]),
                     ft.IconButton(ft.Icons.CLOSE, icon_size=22, icon_color=muted,
                                   tooltip="Salir del escenario",
                                   on_click=lambda _e: self._exit()),
@@ -817,19 +834,6 @@ class PresentScreen:
         disp = display_song(self.song, self.offset)
         self._body.controls = stage_body_from(disp, self.size, self.page.width)
         _safe_update(self._body)
-
-    def _resize(self, delta: int) -> None:
-        self._set_size(self.size + delta)
-
-    def _reset_size(self) -> None:
-        self._set_size(theme.SIZE_STAGE)
-
-    def _set_size(self, value: int) -> None:
-        self.size = max(12, min(64, value))
-        if self._size_text is not None:
-            self._size_text.value = str(self.size)
-            _safe_update(self._size_text)
-        self._refresh()
 
     # ------------------------------------------------------------------
     # Metrónomo (solo si la canción trae BPM válido; ver ``self._bpm``)
@@ -889,17 +893,41 @@ class PresentScreen:
     def _on_speed(self, e) -> None:
         self._speed = float(e.control.value)
 
-    def _on_scroll(self, e) -> None:
-        """Posición y final reales del scroll, los reporte quien los reporte.
+    def _user_moving(self) -> bool:
+        """¿Manda el usuario ahora mismo? Su turno caduca solo (ver ``_USER_GRACE``)."""
+        return time.monotonic() < self._user_hold
 
-        Mientras el autoscroll corre, ``pixels`` llega a mitad de la animación y
-        frenaría el avance; por eso solo se sincroniza la posición cuando está en
-        pausa (que es cuando el usuario desliza con el dedo). El final del
-        contenido, en cambio, siempre interesa.
+    def _on_scroll(self, e) -> None:
+        """Sigue la posición del scroll, distinguiendo QUIÉN mueve la pantalla.
+
+        - El autoscroll: su animación reporta posiciones a mitad de camino; hacerles
+          caso frenaría el avance (cada paso arrancaría desde antes del destino), así
+          que se ignoran.
+        - El usuario (dedo o rueda): manda él. Se anota dónde deja la pantalla para
+          que el autoscroll siga desde ahí en vez de devolverla.
+
+        ``USER`` solo lo dispara el usuario, nunca el autoscroll: por eso abre su
+        turno. El turno se RENUEVA con cada movimiento (mientras el autoscroll cede,
+        él no mueve nada, así que todo movimiento es del usuario o de su inercia) y
+        CADUCA solo al dejar de moverse. Así no depende de recibir el evento final
+        —que el límite de eventos puede descartar— y nunca se queda colgado.
         """
         self._max_extent = e.max_scroll_extent or 0.0
-        if not self._playing:
+        movimiento = e.event_type in (ft.ScrollType.UPDATE, ft.ScrollType.OVERSCROLL)
+        if (e.event_type == ft.ScrollType.USER
+                and e.direction in (ft.ScrollDirection.FORWARD,
+                                    ft.ScrollDirection.REVERSE)):
+            self._user_hold = time.monotonic() + _USER_GRACE      # abre su turno
+        elif movimiento and self._user_moving():
+            self._user_hold = time.monotonic() + _USER_GRACE      # lo renueva
+        # Se sigue la posición real cuando el autoscroll NO manda: en pausa, o
+        # mientras la mueve el usuario.
+        if not self._playing or self._user_moving():
             self._pixels = e.pixels or 0.0
+        if e.event_type == ft.ScrollType.END:
+            # Se detuvo del todo: ya se anotó la posición final, el turno se cierra
+            # sin esperar a que caduque (el autoscroll retoma enseguida).
+            self._user_hold = 0.0
 
     def _set_playing(self, playing: bool) -> None:
         self._playing = playing
@@ -920,6 +948,13 @@ class PresentScreen:
         self._running = True
         try:
             while self._playing:
+                if self._user_moving():
+                    # El usuario está moviendo la pantalla: no se le forza el scroll.
+                    # Cuando su turno caduque, ``_pixels`` ya trae dónde la dejó y se
+                    # sigue desde ahí (p. ej. arrastrar al inicio para repetir, sin
+                    # volver a dar ▶).
+                    await asyncio.sleep(_TICK)
+                    continue
                 if self._at_end():
                     self._set_playing(False)     # se detiene solo y el ícono vuelve a ▶
                     break

@@ -73,6 +73,20 @@ def main(page: ft.Page) -> None:
     if saved_theme in theme.PALETTES:
         theme.set_theme(saved_theme)
 
+    # Tamaño del texto de la canción, también guardado. Se valida al leerlo: un
+    # archivo de preferencias editado a mano o de una versión vieja no debe dejar
+    # la letra ilegible. El rango es el mismo que aplica el botón «Aa».
+    stage_size = get_pref("stage_size", theme.SIZE_STAGE)
+    if not isinstance(stage_size, int) or isinstance(stage_size, bool) \
+            or not (12 <= stage_size <= 48):
+        stage_size = theme.SIZE_STAGE
+
+    def save_stage_size(size: int) -> None:
+        """Recuerda el tamaño del texto entre vistas y entre sesiones."""
+        nonlocal stage_size
+        stage_size = size
+        set_pref("stage_size", size)
+
     def _apply_page_theme() -> None:
         """Colores a nivel de página: fondo, modo, y un ColorScheme mínimo para
         los widgets Material (Slider, Switch, botones de diálogo…), que no leen
@@ -254,10 +268,14 @@ def main(page: ft.Page) -> None:
         show(StageScreen(page, song, on_back=go_home,
                          on_edit=go_edit_song, on_edit_lyrics=go_edit_lyrics,
                          on_present=go_present,
-                         on_persist_key=persist_transpose).build())
+                         on_persist_key=persist_transpose,
+                         size=stage_size, on_size_change=save_stage_size).build())
 
-    def go_present(song, offset: int) -> None:
-        show(PresentScreen(page, song, offset, on_exit=lambda: go_stage(song.id)).build())
+    def go_present(song, offset: int, size: int | None = None) -> None:
+        # ``size`` viene del «Aa» de la vista de canción: el escenario hereda su
+        # fuente. Si no viene, se usa la guardada en preferencias.
+        show(PresentScreen(page, song, offset, on_exit=lambda: go_stage(song.id),
+                           size=size if size is not None else stage_size).build())
 
     def go_setlists(status: str = "") -> None:
         show(build_setlists(db.list_setlists(), on_open=go_setlist_detail,
@@ -353,22 +371,35 @@ def main(page: ft.Page) -> None:
             on_edit_lyrics=lambda sid: go_edit_lyrics(sid, volver_aqui),
             on_offset_change=save_offset,       # guarda el tono en la lista al transponer
             # El ▶ abre el escenario CON navegación de lista; al salir vuelve aquí.
-            on_present=lambda s, o: go_present_in_setlist(setlist, index),
+            # El 3er argumento es el tamaño de fuente que trae esta vista («Aa»).
+            on_present=lambda s, o, size: go_present_in_setlist(setlist, index, size),
+            size=stage_size, on_size_change=save_stage_size,
         ).build())
 
-    def go_present_in_setlist(setlist, index: int) -> None:
+    def go_present_in_setlist(setlist, index: int,
+                              size: int | None = None) -> None:
         """Escenario (pantalla completa) de una canción de la lista, con ‹/› para
-        pasar de canción, swipe, y salida a la vista de canción con navegación."""
+        pasar de canción, swipe, y salida a la vista de canción con navegación.
+
+        ``size`` es el tamaño de fuente heredado de la vista de canción; se conserva
+        al pasar a la anterior/siguiente. Desde el ▶ del detalle de la lista no hay
+        una vista previa de donde heredarlo, así que se usa el guardado.
+        """
+        if size is None:
+            size = stage_size
         item = setlist.items[index]
         song = db.load_song(item.song_id)
-        on_prev = (lambda: go_present_in_setlist(setlist, index - 1)) if index > 0 else None
+        on_prev = ((lambda: go_present_in_setlist(setlist, index - 1, size))
+                   if index > 0 else None)
         last = len(setlist.items) - 1
-        on_next = (lambda: go_present_in_setlist(setlist, index + 1)) if index < last else None
+        on_next = ((lambda: go_present_in_setlist(setlist, index + 1, size))
+                   if index < last else None)
         show(PresentScreen(
             page, song, item.transpose,
             on_exit=lambda: go_stage_in_setlist(setlist, index),
             on_prev=on_prev, on_next=on_next,
             position_label=f"{index + 1}/{len(setlist.items)}",
+            size=size,
         ).build())
 
     go_home()
