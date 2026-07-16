@@ -146,7 +146,7 @@ def build_setlists(setlists: list[dict], on_open: Callable[[int], None],
     header = ft.Container(
         padding=ft.Padding.only(top=16, bottom=6),
         alignment=ft.Alignment.CENTER,
-        content=ft.Image(src="ilahi-logo.png", height=52, fit=ft.BoxFit.CONTAIN),
+        content=ft.Image(src=theme.logo(), height=52, fit=ft.BoxFit.CONTAIN),
     )
 
     lv = ft.ListView(expand=True, controls=[])

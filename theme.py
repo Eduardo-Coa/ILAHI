@@ -112,6 +112,12 @@ DESCRIPTIONS: dict[str, str] = {
     "alba":       "Claro y neutro, con el azul de la marca",
 }
 
+# Logos de la marca (en assets/). OJO con los nombres: «claro»/«oscuro» describen
+# el color del LOGO, no el del tema. El claro (texto crema) es el que se ve sobre
+# fondo oscuro; el oscuro (texto navy) sobre fondo claro. Ver ``logo()``.
+LOGO_ON_DARK = "Ilahi-claro.png"
+LOGO_ON_LIGHT = "Ilahi-oscuro.png"
+
 DEFAULT_THEME = "noche"
 _active: str = DEFAULT_THEME
 
@@ -140,6 +146,14 @@ def is_dark() -> bool:
     hx = THEME["bg"].lstrip("#")
     r, g, b = (int(hx[i:i + 2], 16) for i in (0, 2, 4))
     return (r * 299 + g * 587 + b * 114) / 1000 < 128
+
+
+def logo() -> str:
+    """Archivo del logo que contrasta con el fondo del tema activo.
+
+    En los temas claros el logo crema desaparecería sobre el fondo, así que se usa
+    la versión de texto navy."""
+    return LOGO_ON_DARK if is_dark() else LOGO_ON_LIGHT
 
 # Familia monoespaciada (alineación acorde/letra). En Android se sustituye por una
 # fuente bundleada (p. ej. JetBrains Mono) en la fase de empaque.
