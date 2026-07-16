@@ -1,0 +1,12 @@
+# Dependencias de runtime de HymnChords móvil (Flet).
+#
+# La lógica (models/, utils/, database/db.py) es Python de la biblioteca estándar,
+# copiada de la app de escritorio: NO depende de Flet y se prueba con pytest sin UI.
+# Flet (Flutter por debajo) provee la interfaz y el empaquetado a APK.
+#
+# La versión se fija (==) una vez confirmada la que instala y compila bien, igual
+# que la política de la app de escritorio.
+flet==0.85.3
+# Extensión de audio (los clicks del metrónomo): el control Audio ya no viene en
+# el core de Flet. flet build la detecta aquí/en pyproject y la compila al APK.
+flet-audio==0.85.3

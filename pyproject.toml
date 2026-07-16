@@ -1,0 +1,16 @@
+[project]
+name = "hymnchords"
+version = "1.0.0"
+description = "HymnChords — cifrado y acordes para guitarristas de iglesia"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "flet==0.85.3",
+    "flet-audio==0.85.3",   # clicks del metrónomo (Audio ya no viene en el core)
+]
+
+[tool.flet]
+org = "com.eduardocoa"
+product = "HymnChords"
+company = "HymnChords"
+copyright = "Copyright (C) 2026 Eduardo Coa"

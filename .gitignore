@@ -1,0 +1,26 @@
+# Entorno virtual
+.venv/
+venv/
+
+# Cachés de Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Datos locales de desarrollo / bases de datos (nunca versionar la biblioteca)
+*.db
+*.db-journal
+storage/
+.hymnchordsmobile/
+
+# Artefactos de build de Flet / Flutter
+build/
+dist/
+*.apk
+*.aab
+
+# Sistema operativo / editores
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
