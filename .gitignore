@@ -24,3 +24,6 @@ dist/
 Thumbs.db
 .vscode/
 .idea/
+
+# Compases del metrónomo generados en runtime (ver utils/click_track.py)
+assets/metro_*.wav

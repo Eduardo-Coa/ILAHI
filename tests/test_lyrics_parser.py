@@ -209,7 +209,11 @@ def test_linea_de_acordes_con_guiones_se_reconoce():
     assert is_chord_line_text("G - Bm - A - D - A")
     assert is_chord_line_text("A - G - Bm - A - D - A - G")
     assert not is_chord_line_text("solo - texto suelto")  # no son acordes
-    assert not is_chord_line_text("- - -")                # solo guiones
+    # Una línea de SOLO guiones son casillas vacías (la Introducción se ve así en
+    # el editor y se puede escribir a mano); antes se tomaba como letra y acababa
+    # en una estrofa suelta.
+    assert is_chord_line_text("- - -")
+    assert not is_chord_line_text("")                     # línea en blanco
 
 
 def test_bloque_de_acordes_al_inicio_es_introduccion():

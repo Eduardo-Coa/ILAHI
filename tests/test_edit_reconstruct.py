@@ -41,9 +41,16 @@ def test_reconstruct_mantiene_interludio_con_guiones():
     assert "Bm - A - D - A - G" in txt
 
 
-def test_reconstruct_no_incluye_la_introduccion_prependida():
+def test_reconstruct_incluye_la_introduccion_con_sus_guiones():
+    """La Introducción se ve y se edita: sus casillas viajan como guiones.
+
+    Antes se omitía del texto y se conservaba aparte, así que editarla no tenía
+    efecto y escribirla a mano no creaba casillas. Ahora lo que se ve es lo que hay.
+    """
     txt = reconstruct_lyrics(_cancion())
-    assert "Introducción" not in txt
+    assert "[Introducción]" in txt
+    # Las casillas vacías se muestran como una fila de guiones, una por casilla.
+    assert "- - - - -" in txt
 
 
 def test_roundtrip_sin_editar_conserva_acordes_en_las_mismas_silabas():

@@ -18,7 +18,7 @@ import flet as ft
 
 from models.song import Song, Line, Syllable
 from models.transposer import display_song, semitones_between
-from utils.metronome import BPM_MIN, BPM_MAX, Metronome, beats_per_measure, valid_bpm
+from utils.metronome import BPM_MIN, BPM_MAX, beats_per_measure, valid_bpm
 from views.metro_sound import MetroSound
 from utils.song_text import SECTION_LABELS
 from utils.lyrics_parser import is_chord_line
@@ -166,10 +166,13 @@ def stage_body_from(disp: Song, size: int, page_width: float | None = None) -> l
                                 color=theme.THEME["section_label"]),
             ))
         for line in section.lines:
-            if section.type == "intro":
+            # Las casillas se dibujan como guiones con su acorde encima, estén en
+            # la Introducción, en un interludio o en cualquier sección donde se
+            # agreguen ([Final], [Coro]…). Lo que manda es la línea, no el tipo de
+            # sección: antes se descartaban fuera de la intro y solo se veía su
+            # encabezado.
+            if is_chord_line(line):
                 blocks.append(_intro_line_block(line, size))
-            elif is_chord_line(line):
-                continue          # las casillas de solo acordes viven en la intro
             else:
                 for part in wrap_lyric_line(line.syllables, size, avail):
                     blocks.append(_line_block(
@@ -639,13 +642,12 @@ class PresentScreen:
             content=self._play_icon(), on_click=self._toggle_play,
             ink=True, padding=8, border_radius=20)
         if self._bpm is not None:
-            self._metro = Metronome(self._bpm, self._on_metro_beat,
-                                    beats=beats_per_measure(song.rhythm))
-            self._metro_sound = MetroSound(page)   # clicks (no-op sin flet-audio)
-            self._metro_dot = ft.Container(
-                width=14, height=14, border_radius=7,
-                bgcolor=theme.THEME["chord_bg"],
-                border=ft.Border.all(1, theme.THEME["border"]))
+            # El compás suena en bucle desde el motor de audio (no se dispara un
+            # click por golpe: eso iba a destiempo). Por eso aquí no hay ningún
+            # bucle de Python ni indicador que late: el tempo lo lleva el audio.
+            self._beats = beats_per_measure(song.rhythm)
+            self._metro_sound = MetroSound(page)   # bucle (no-op sin flet-audio)
+            self._metro_on = False
             self._metro_text = ft.Text(str(self._bpm), size=15,
                                        weight=ft.FontWeight.BOLD, color=theme.THEME["text"])
 
@@ -700,14 +702,16 @@ class PresentScreen:
     def _go_prev(self) -> None:
         """Detiene el metrónomo (si lo hay) antes de cambiar de canción."""
         if self._bpm is not None:
-            self._metro.stop()
+            self._metro_on = False
+            self._metro_sound.stop()
         if self.on_prev is not None:
             self.on_prev()
 
     def _go_next(self) -> None:
         """Detiene el metrónomo (si lo hay) antes de cambiar de canción."""
         if self._bpm is not None:
-            self._metro.stop()
+            self._metro_on = False
+            self._metro_sound.stop()
         if self.on_next is not None:
             self.on_next()
 
@@ -788,21 +792,22 @@ class PresentScreen:
             ])
         filas: list[ft.Control] = [velocidad]
         if self._bpm is not None:
-            self._metro_toggle = _slot(self._metro_icon(), on_click=self._toggle_metro,
+            self._metro_toggle = _slot(self._metro_icon(self._metro_on),
+                                       on_click=self._toggle_metro,
                                        tooltip="Metrónomo")
             metronomo = ft.Row(
                 vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=6, controls=[
+                    # Ícono Material, no el glifo «♩»: la fuente de Android no lo
+                    # trae y lo pintaba como una «J» (igual que pasó con el ▶).
                     ft.Container(width=_PLAY_WIDTH, alignment=ft.Alignment.CENTER,
-                                 content=ft.Text("♩", size=18, weight=ft.FontWeight.BOLD,
+                                 content=ft.Icon(ft.Icons.MUSIC_NOTE, size=20,
                                                  color=texto)),
                     _slot(ft.Container(width=1, height=20, bgcolor=theme.THEME["border"])),
                     ft.Row(expand=True, alignment=ft.MainAxisAlignment.CENTER, spacing=10,
                            vertical_alignment=ft.CrossAxisAlignment.CENTER, controls=[
                                _circle_button("−", lambda _e: self._adjust_metro_bpm(-5),
                                               diameter=40, bgcolor=theme.THEME["surface2"]),
-                               ft.Row([self._metro_dot, self._metro_text], spacing=6,
-                                      tight=True,
-                                      vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                               self._metro_text,
                                _circle_button("+", lambda _e: self._adjust_metro_bpm(5),
                                               diameter=40, bgcolor=theme.THEME["surface2"]),
                            ]),
@@ -838,57 +843,35 @@ class PresentScreen:
     # ------------------------------------------------------------------
     # Metrónomo (solo si la canción trae BPM válido; ver ``self._bpm``)
     # ------------------------------------------------------------------
-    def _on_metro_beat(self, index: int) -> None:
-        """Enciende el punto de pulso (dorado en el acento, golpe 0) y lo apaga
-        tras un instante; solo actualiza el punto, nunca el resto de la UI, para
-        no interferir con el autoscroll."""
-        if self._bpm is None:
-            return
-        self._metro_sound.click(index)             # click audible (si hay audio)
-        self._metro_dot.bgcolor = (theme.THEME["accent"] if index == 0
-                                   else theme.THEME["chord"])
-        _safe_update(self._metro_dot)
-        self.page.run_task(self._metro_dot_off)
-
-    async def _metro_dot_off(self) -> None:
-        await asyncio.sleep(0.12)
-        if self._bpm is None:
-            return
-        self._metro_dot.bgcolor = theme.THEME["chord_bg"]
-        _safe_update(self._metro_dot)
-
-    def _metro_icon(self, running: bool | None = None) -> ft.Control:
-        """Ícono de la casilla ▶/■: corriendo muestra detener, detenido muestra play."""
-        if running is None:
-            running = self._bpm is not None and self._metro.playing
+    def _metro_icon(self, running: bool) -> ft.Control:
+        """Ícono de la casilla ▶/■: sonando muestra detener, detenido muestra play."""
         return ft.Icon(ft.Icons.STOP if running else ft.Icons.PLAY_ARROW, size=18,
                        color=theme.THEME["text"] if running else theme.THEME["text_muted"])
 
     def _toggle_metro(self, _e=None) -> None:
+        """Arranca o detiene el bucle del compás."""
         if self._bpm is None:
             return
-        arranca = not self._metro.playing
-        if arranca:
-            self.page.run_task(self._metro.run)
+        self._metro_on = not self._metro_on
+        if self._metro_on:
+            self._metro_sound.start(self._bpm, self._beats)
         else:
-            self._metro.stop()
-            self._metro_dot.bgcolor = theme.THEME["chord_bg"]
-            _safe_update(self._metro_dot)
-        # El ícono refleja el estado al que se VA: ``run_task`` apenas agenda la
-        # corrutina, así que leer ``playing`` aquí daría todavía el estado viejo.
+            self._metro_sound.stop()
         if self._metro_toggle is not None:
-            self._metro_toggle.content = self._metro_icon(arranca)
+            self._metro_toggle.content = self._metro_icon(self._metro_on)
             _safe_update(self._metro_toggle)
 
     def _adjust_metro_bpm(self, delta: int) -> None:
         """Ajusta el tempo ±5 BPM (tope en BPM_MIN/BPM_MAX); solo de sesión, no
-        se guarda en la base de datos."""
+        se guarda en la base de datos. Si está sonando, se rearma el compás al
+        tempo nuevo."""
         if self._bpm is None:
             return
         self._bpm = max(BPM_MIN, min(BPM_MAX, self._bpm + delta))
         self._metro_text.value = str(self._bpm)
         _safe_update(self._metro_text)
-        self._metro.set_bpm(self._bpm)
+        if self._metro_on:
+            self._metro_sound.start(self._bpm, self._beats)
 
     def _on_speed(self, e) -> None:
         self._speed = float(e.control.value)
@@ -978,7 +961,8 @@ class PresentScreen:
     def _exit(self) -> None:
         self._playing = False                   # detiene el autoscroll al salir
         if self._bpm is not None:
-            self._metro.stop()                  # detiene el metrónomo al salir
+            self._metro_on = False
+            self._metro_sound.stop()                  # detiene el metrónomo al salir
         self.page.bgcolor = theme.THEME["bg"]   # devuelve el fondo del tema
         _safe_update(self.page)
         self.on_exit()

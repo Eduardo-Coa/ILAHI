@@ -216,13 +216,39 @@ def test_la_animacion_del_autoscroll_no_frena_su_propio_avance():
     assert screen._pixels == 500.0
 
 
-def test_on_metro_beat_acento_en_el_primer_golpe():
+def test_el_toggle_arranca_y_detiene_el_bucle_del_compas():
+    """El compás suena en bucle desde el motor de audio; aquí solo se alterna.
+
+    Ya no hay bucle de Python ni punto que late: disparar un click por golpe
+    sonaba a destiempo (cada ``play()`` tardaba algo distinto en llegar al motor).
+    """
     song = Song(id=1, title="X", bpm=90, rhythm="4/4", sections=[])
     screen = PresentScreen(_FakePage(), song, 0, on_exit=lambda: None)
     screen.build()
+    llamadas: list = []
+    screen._metro_sound.start = lambda bpm, beats: llamadas.append(("start", bpm, beats))
+    screen._metro_sound.stop = lambda: llamadas.append(("stop",))
 
-    screen._on_metro_beat(0)
-    assert screen._metro_dot.bgcolor == theme.THEME["accent"]
+    screen._toggle_metro()
+    assert screen._metro_on is True
+    assert llamadas == [("start", 90, 4)]          # 4/4 → acento cada 4 golpes
 
-    screen._on_metro_beat(1)
-    assert screen._metro_dot.bgcolor == theme.THEME["chord"]
+    screen._toggle_metro()
+    assert screen._metro_on is False
+    assert llamadas[-1] == ("stop",)
+
+
+def test_cambiar_el_tempo_rearma_el_compas_solo_si_esta_sonando():
+    song = Song(id=2, title="Y", bpm=90, rhythm="4/4", sections=[])
+    screen = PresentScreen(_FakePage(), song, 0, on_exit=lambda: None)
+    screen.build()
+    llamadas: list = []
+    screen._metro_sound.start = lambda bpm, beats: llamadas.append(bpm)
+
+    screen._adjust_metro_bpm(5)                    # detenido: no rearma nada
+    assert llamadas == []
+    assert screen._bpm == 95
+
+    screen._metro_on = True
+    screen._adjust_metro_bpm(5)                    # sonando: rearma al tempo nuevo
+    assert llamadas == [100]

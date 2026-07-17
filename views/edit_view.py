@@ -15,7 +15,8 @@ from models.song import Song, Section, Line, Syllable, Chord
 from models.key_chords import chords_for_key
 from models.transposer import transpose_chord
 from utils.lyrics_parser import (parse_lyrics, merge_lyrics, is_chord_line,
-                                 INTRO_LABEL, prepend_intro)
+                                 INTRO_LABEL, prepend_intro, chord_line_text,
+                                 normalize_intro)
 from utils.metronome import valid_bpm
 from utils.song_text import SECTION_LABELS
 from views.widgets import (back_button, centered_header, floating_panel,
@@ -212,7 +213,7 @@ class NewSongScreen:
             self._show("Pega la letra primero.")
             return
         song = parse_lyrics(text, title)
-        prepend_intro(song)          # toda canción nueva empieza con «Introducción»
+        normalize_intro(song)        # toda canción nueva empieza con «Introducción» completa
         song.author = (self._author.value or "").strip() or None
         song.key = (self._key.value or "").strip() or None
         song.original_key = (self._original_key.value or "").strip() or None
@@ -311,17 +312,16 @@ class EditSongScreen:
         avail = (page_w or 400) - 24
         for index, section in enumerate(self.song.sections):
             blocks.append(self._section_header(section, index))
-            if section.type == "intro":
-                # Casillas de acorde SIEMPRE visibles (guiones), aunque estén vacías.
-                for line in section.lines:
+            for line in section.lines:
+                # Casillas de acorde SIEMPRE visibles y tocables (guiones), aunque
+                # estén vacías: en la Introducción, en interludios y en cualquier
+                # sección donde se agreguen ([Final], [Coro]…). Lo que manda es la
+                # línea, no el tipo de sección.
+                if is_chord_line(line):
                     blocks.append(ft.Row(
                         [self._intro_cell(s, section) for s in line.syllables],
                         wrap=True, spacing=0, run_spacing=2,
                         vertical_alignment=ft.CrossAxisAlignment.START))
-                continue
-            for line in section.lines:
-                # Las líneas de solo acordes (casillas) solo se muestran en la intro.
-                if is_chord_line(line):
                     continue
                 if not any(s.text.strip() or s.chord for s in line.syllables):
                     blocks.append(ft.Container(height=int(self._size * 0.3)))
@@ -627,25 +627,23 @@ def _chord_row_for_edit(line) -> tuple[str, str]:
 def reconstruct_lyrics(song: Song) -> str:
     """Texto plano editable de la canción: encabezados [Sección] + líneas de letra.
 
-    La «Introducción» prependida no se incluye (son casillas, sin letra editable;
-    ``merge_lyrics`` la conserva aparte). Los **interludios** sí aparecen como
-    ``[Interludio]`` para poder moverlos/quitarlos y que su posición se conserve.
-    Las líneas de casillas con acordes se muestran como una secuencia con guiones
-    (``G - Bm - A``). Las líneas de letra con acordes traen una fila de acordes
+    La «Introducción» y los **interludios** aparecen como una sección más: sus
+    casillas se ven como guiones (``- - - - -``) o como la secuencia de acordes que
+    tengan (``G - Bm - A``). Así se pueden ver y editar a mano, y sobre todo NO se
+    pierden al reprocesar el texto (antes la Introducción se omitía y editarla no
+    tenía efecto). Las líneas de letra con acordes traen una fila de acordes
     alineada encima (estilo Cifra Club): así los acordes viajan en el texto y no se
     pierden al editar una línea, y además se pueden editar a mano.
     """
     out: list[str] = []
     for section in song.sections:
-        if section.type == "intro" and section.label == INTRO_LABEL:
-            continue
         label = section.label or SECTION_LABELS.get(section.type, "")
         if label:
             out.append(f"[{label}]")
         for line in section.lines:
             if is_chord_line(line):
-                # casillas/interludio → secuencia con guiones (se mantiene igual)
-                out.append(" - ".join(s.chord.value for s in line.syllables if s.chord))
+                # casillas (Introducción / interludio): acordes, o guiones si están vacías
+                out.append(chord_line_text(line))
             else:
                 # línea de letra: si tiene acordes, su fila de acordes va encima
                 chord_row, lyric_row = _chord_row_for_edit(line)
@@ -704,6 +702,9 @@ class EditLyricsScreen:
 
     def _save(self, _e=None) -> None:
         merged = merge_lyrics(self.song, self._text.value or "")
+        # Al guardar, la canción siempre queda con la «Introducción» completa (2
+        # líneas de 5 casillas), aunque el texto la traiga a medias o no la traiga.
+        normalize_intro(merged)
         merged.author = (self._author.value or "").strip() or None
         merged.key = (self._key.value or "").strip() or None
         merged.original_key = (self._original_key.value or "").strip() or None

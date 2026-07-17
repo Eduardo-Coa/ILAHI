@@ -11,6 +11,8 @@ dependencies = [
 
 [tool.flet]
 org = "com.eduardocoa"
-product = "HymnChords"
-company = "HymnChords"
+# `product` es el nombre que se ve bajo el ícono en el teléfono. El id del paquete
+# sale de `[project] name`, así que renombrar aquí no reinstala la app desde cero.
+product = "Ilahi"
+company = "Ilahi"
 copyright = "Copyright (C) 2026 Eduardo Coa"

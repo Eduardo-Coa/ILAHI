@@ -33,6 +33,45 @@ def make_intro_section(position: int = 0) -> Section:
     return intro
 
 
+def chord_line_text(line: Line) -> str:
+    """Una línea de casillas como texto editable.
+
+    Sin acordes → un guion por casilla («- - - - -»), para que se vea y se pueda
+    escribir a mano. Con acordes → la secuencia habitual («G - Bm - A»), el mismo
+    formato que se pega de otros sitios. En ambos casos ``parse_lyrics`` la vuelve
+    a leer como casillas, así la Introducción no se pierde al reprocesar.
+    """
+    chords = [s.chord.value for s in line.syllables if s.chord]
+    if not chords:
+        return " ".join("-" for _ in line.syllables)
+    return " - ".join(chords)
+
+
+def normalize_intro(song: Song) -> Song:
+    """Garantiza que la canción empiece con la «Introducción» completa. Muta ``song``.
+
+    Siempre deja 2 líneas de 5 casillas: si el texto trajo menos (p. ej. «G - Bm»
+    da 2 casillas) se rellena con vacías, para que el usuario siempre vea los cinco
+    guiones donde anotar los acordes de la entrada.
+    """
+    prepend_intro(song)
+    intro = song.sections[0]
+    # Los renglones en blanco del texto llegan como líneas sin casillas: se
+    # descartan para que no se conviertan en filas extra de guiones.
+    intro.lines = [l for l in intro.lines if l.syllables]
+    while len(intro.lines) < INTRO_LINES:
+        intro.lines.append(Line(id=None, position=len(intro.lines)))
+    for line_pos, line in enumerate(intro.lines):
+        line.position = line_pos
+        while len(line.syllables) < INTRO_SLOTS:
+            line.syllables.append(
+                Syllable(id=None, position=len(line.syllables), text=""))
+        for pos, syl in enumerate(line.syllables):
+            syl.position = pos
+            syl.text = ""            # la Introducción son casillas, nunca letra
+    return song
+
+
 def prepend_intro(song: Song) -> Song:
     """Antepone la «Introducción» a la canción y renumera las posiciones. Muta ``song``.
 
@@ -77,14 +116,28 @@ def _is_separator_token(tok: str) -> bool:
 
 
 def is_chord_line_text(line: str) -> bool:
-    """True si la línea es de solo acordes (ignorando guiones separadores).
+    """True si la línea es de casillas: solo acordes, guiones, o ambos.
 
-    Reconoce tanto acordes alineados por columna («G      Bm») como secuencias
-    separadas por guiones («G - Bm - A - D - A»); en ambos casos todos los tokens
-    que no son separadores deben parecer acordes.
+    Reconoce acordes alineados por columna («G      Bm»), secuencias separadas por
+    guiones («G - Bm - A - D - A») y líneas de SOLO guiones («- - - - -»), que son
+    casillas vacías a la espera de acordes: así se pueden escribir a mano en el
+    editor y también volver a leer las que la app escribe (ver ``chord_line_text``).
     """
-    tokens = [t for t in line.split() if not _is_separator_token(t)]
-    return bool(tokens) and all(is_chord_token(t) for t in tokens)
+    tokens = line.split()
+    if not tokens:
+        return False
+    chords = [t for t in tokens if not _is_separator_token(t)]
+    if not chords:
+        return True                      # solo guiones: casillas vacías
+    return all(is_chord_token(t) for t in chords)
+
+
+def _dash_only_slots(raw: str) -> int:
+    """Casillas que representa una línea de SOLO guiones (una por guion); 0 si no lo es."""
+    tokens = raw.split()
+    if not tokens or any(not _is_separator_token(t) for t in tokens):
+        return 0
+    return len(tokens)
 
 # Palabras clave para inferir el tipo de sección a partir de su etiqueta.
 # El primer tipo cuya palabra clave aparezca en la etiqueta gana.
@@ -379,10 +432,16 @@ def _attach_chords(chord_raw: str, lyric_raw: str, position: int) -> Line:
     return line
 
 
-def _filled_chord_line(tokens: list[str], position: int) -> Line:
-    """Línea de solo acordes (slots vacíos) con los acordes en orden."""
+def _filled_chord_line(tokens: list[str], position: int,
+                       slots: int = 0) -> Line:
+    """Línea de solo acordes (slots vacíos) con los acordes en orden.
+
+    ``slots`` fija cuántas casillas tendrá la línea; se usa para las líneas de solo
+    guiones («- - - - -»), donde cada guion es una casilla vacía y no hay acordes
+    de los que deducir el número.
+    """
     line = Line(id=None, position=position)
-    n = max(len(tokens), CHORD_LINE_SLOTS)
+    n = max(len(tokens), slots or CHORD_LINE_SLOTS)
     for i in range(n):
         syl = Syllable(id=None, position=i, text="")
         if i < len(tokens):
@@ -498,8 +557,10 @@ def parse_lyrics(text: str, title: str = "Sin título") -> Song:
                 current = start_section(INTRO_LABEL, "intro")
             elif _has_lyric(current):
                 current = start_section("Interludio", "intro")
+            # Una línea de solo guiones son casillas vacías: una por guion.
             current.lines.append(
-                _filled_chord_line(_chord_tokens(raw), counters["line"]))
+                _filled_chord_line(_chord_tokens(raw), counters["line"],
+                                   slots=_dash_only_slots(raw)))
             counters["line"] += 1
             i += 1
             continue
@@ -568,12 +629,20 @@ def merge_lyrics(existing: Song, new_text: str) -> Song:
                 old_line = old_by_text[text].popleft()
                 line.syllables = old_line.syllables  # conserva acordes
 
-    # La «Introducción» prependida no aparece en el texto editable: se separa para
-    # que la alineación por índice con el resto de secciones cuadre, y se repone al
-    # frente al final (con sus acordes intactos).
-    intro = next((s for s in existing.sections
-                  if s.type == "intro" and s.label == INTRO_LABEL), None)
-    existing_body = [s for s in existing.sections if s is not intro]
+    # La «Introducción» ahora VIAJA EN EL TEXTO (sus casillas se ven como guiones,
+    # con los acordes que tengan), así que la del texto MANDA: lo que se edita es lo
+    # que queda. Antes se conservaba la vieja y se reponía al frente, por eso
+    # editarla no tenía efecto. Si el texto no la trae, se conserva la anterior.
+    # Ambas se apartan del cuerpo para que la alineación por índice cuadre.
+    def _es_intro(s: Section) -> bool:
+        return s.type == "intro" and s.label == INTRO_LABEL
+
+    intro_nueva = next((s for s in merged.sections if _es_intro(s)), None)
+    intro_vieja = next((s for s in existing.sections if _es_intro(s)), None)
+    intro = intro_nueva if intro_nueva is not None else intro_vieja
+    existing_body = [s for s in existing.sections if s is not intro_vieja]
+    merged_body = [s for s in merged.sections if s is not intro_nueva]
+    merged.sections = merged_body
 
     # Recuperar acordes de las casillas que quedaron VACÍAS (p. ej. la entrada de
     # una sección, que no viaja en el texto), emparejando por índice de sección.
@@ -591,10 +660,7 @@ def merge_lyrics(existing: Song, new_text: str) -> Song:
                 new_section.lines[i] = old_chord_lines.popleft()
 
     if intro is not None:
-        merged.sections = [intro] + [
-            s for s in merged.sections
-            if not (s.type == "intro" and s.label == INTRO_LABEL)
-        ]
+        merged.sections = [intro] + merged.sections
     for pos, section in enumerate(merged.sections):
         section.position = pos
 

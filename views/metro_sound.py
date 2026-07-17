@@ -1,69 +1,129 @@
-"""Sonido del metrónomo vía ``flet-audio`` (extensión opcional de Flet).
+"""Sonido del metrónomo: un compás en bucle, vía ``flet-audio``.
 
-El control ``Audio`` ya no viene en el core de Flet: vive en el paquete
-``flet-audio`` (declarado en ``pyproject.toml`` para que ``flet build`` lo
-compile dentro del APK). Si el paquete no está instalado, o el cliente que
-corre la app no trae el plugin de audio, TODO en este módulo degrada a no-op:
-el metrónomo sigue funcionando con el pulso visual y la vista de escenario
-nunca se rompe por el sonido.
+NO se dispara un click por golpe: eso sonaba a destiempo, porque cada ``play()``
+es un mensaje que tarda algo distinto en llegar al motor de audio y el ritmo lo
+acababa marcando el transporte. En vez de eso se arma UN compás completo (ver
+``utils.click_track``) y se deja que el motor lo repita en bucle: el tempo lo
+lleva el audio nativo con precisión de sample y no se manda ni un mensaje por
+golpe.
+
+El control ``Audio`` vive en el paquete ``flet-audio`` (declarado en
+``pyproject.toml`` para que ``flet build`` lo compile dentro del APK). Si el
+paquete no está, o el cliente no trae el plugin, todo degrada a no-op: el
+metrónomo simplemente no suena y la vista nunca se rompe.
 """
 
 from __future__ import annotations
 
+import logging
+
+from utils.click_track import write_measure, ClickTrackError
+
 try:
     import flet_audio as _fta
-except ImportError:                      # sin paquete: metrónomo solo visual
+except ImportError:                      # sin paquete: metrónomo mudo
     _fta = None
 
-# Etiquetas para encontrar (y reutilizar) los servicios ya creados en la página.
-_TAG_HI = "ilahi-click-hi"
-_TAG_LO = "ilahi-click-lo"
+log = logging.getLogger(__name__)
+
+# Etiqueta para encontrar (y reutilizar) el servicio ya creado en la página.
+_TAG = "ilahi-metro"
 
 
 class MetroSound:
-    """Par de clicks del metrónomo (acento / golpe normal) en ``page.services``.
+    """Reproduce el compás del metrónomo en bucle.
 
-    Los ``Audio`` se crean UNA sola vez por página y se reutilizan entre visitas
-    al escenario (se buscan por su ``data``); ``ReleaseMode.STOP`` mantiene el
-    sonido cargado para relanzarlo sin latencia en cada golpe.
+    El ``Audio`` se crea UNA vez por página y se reutiliza entre visitas al
+    escenario (se busca por su ``data``).
     """
 
     def __init__(self, page) -> None:
         self.page = page
-        self._hi = self._lo = None
-        if _fta is None:
-            return
-        try:
-            self._hi = self._attach(_TAG_HI, "click_hi.wav")
-            self._lo = self._attach(_TAG_LO, "click_lo.wav")
-        except Exception:                # cliente sin plugin de audio: no-op
-            self._hi = self._lo = None
+        self._audio = None
 
-    def _attach(self, tag: str, src: str):
-        """Devuelve el ``Audio`` ya anclado con esa etiqueta, o lo crea y ancla."""
-        for svc in self.page.services:
-            if getattr(svc, "data", None) == tag:
-                return svc
-        audio = _fta.Audio(src=src, volume=1.0,
-                           release_mode=_fta.ReleaseMode.STOP)
-        audio.data = tag
+    def _attach(self, ruta: str):
+        """Crea el ``Audio`` con la fuente YA puesta y lo monta en la página.
+
+        El ``src`` va en el constructor a propósito: crear el control vacío y luego
+        mutar ``src`` + ``update()`` dejaba el ``play()`` esperando para siempre
+        (``TimeoutException``), tanto con bytes como con una ruta. Por eso cada
+        tempo descarta el control anterior y monta uno nuevo.
+        """
+        for viejo in [s for s in self.page.services
+                      if getattr(s, "data", None) == _TAG]:
+            self.page.services.remove(viejo)
+        audio = _fta.Audio(src=ruta, volume=1.0,
+                           release_mode=_fta.ReleaseMode.LOOP)
+        audio.data = _TAG
         self.page.services.append(audio)
+        # Montarlo YA: agregarlo a la lista no lo crea en el cliente, y sin eso
+        # ``play()`` falla con «Control must be added to the page first».
+        try:
+            self.page.update()
+        except Exception:
+            pass
         return audio
 
     @property
     def enabled(self) -> bool:
-        """¿Hay con qué sonar? (paquete instalado y servicios creados)."""
-        return self._hi is not None
+        """¿Hay con qué sonar? (el paquete de audio está instalado)."""
+        return _fta is not None
 
-    def click(self, index: int) -> None:
-        """Suena el click del golpe ``index`` (0 = acento, más agudo y fuerte).
+    def _avisar(self, texto: str) -> None:
+        """Muestra el problema al usuario; nunca deja caer un error encima."""
+        try:
+            from views.widgets import show_toast
+            show_toast(self.page, texto, seconds=6.0)
+        except Exception:
+            pass
 
-        ``play`` es async en flet-audio, así que se agenda con ``run_task``;
-        cualquier error se ignora para que el pulso visual siga intacto."""
-        audio = self._hi if index == 0 else self._lo
-        if audio is None:
+    def start(self, bpm: int, beats: int = 0) -> None:
+        """Arma el compás a ese tempo y lo lanza en bucle (reemplaza al anterior).
+
+        Los errores se registran pero nunca se propagan: si el audio falla, el
+        metrónomo queda mudo y la vista sigue funcionando."""
+        if _fta is None:
             return
         try:
-            self.page.run_task(audio.play)
+            # Se entrega la RUTA del archivo: mandarlo en bytes por el canal de Flet
+            # daba TimeoutException (pesa cientos de KB) y como nombre de asset
+            # quedaba mudo (Flutter fija sus assets al compilar). Ver write_measure.
+            ruta = write_measure(bpm, beats)
+            audio = self._attach(str(ruta))   # control NUEVO, con la fuente ya puesta
+            self._audio = audio
+        except Exception as ex:
+            log.warning("no se pudo preparar el metrónomo: %r", ex)
+            self._avisar(f"✗ Metrónomo: {type(ex).__name__}: {ex}")
+            return
+
+        async def _lanzar() -> None:
+            try:
+                await audio.play()
+            except Exception as ex:
+                # El fallo se AVISA en pantalla: en el APK ni los print ni el log
+                # llegan a donde se puedan leer, así que un metrónomo mudo sin más
+                # no da ninguna pista de qué pasó.
+                log.warning("play() del metrónomo falló: %r", ex)
+                self._avisar(f"✗ Metrónomo sin audio: {type(ex).__name__}: {ex}")
+
+        try:
+            self.page.run_task(_lanzar)
+        except Exception as ex:
+            log.warning("no se pudo agendar el arranque del metrónomo: %r", ex)
+
+    def stop(self) -> None:
+        """Detiene el bucle."""
+        if self._audio is None:
+            return
+        audio = self._audio
+
+        async def _parar() -> None:
+            try:
+                await audio.pause()
+            except Exception as ex:
+                log.warning("pause() del metrónomo falló: %r", ex)
+
+        try:
+            self.page.run_task(_parar)
         except Exception:
             pass
