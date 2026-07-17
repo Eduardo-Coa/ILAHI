@@ -1,6 +1,7 @@
 """Tests del sonido del metrónomo: compás en bucle (con y sin flet-audio)."""
 
 from __future__ import annotations
+import array
 import io
 import struct
 import wave
@@ -12,7 +13,7 @@ import pytest
 import views.metro_sound as ms
 from views.metro_sound import MetroSound
 import utils.click_track as ct
-from utils.click_track import build_measure, write_measure, ClickTrackError
+from utils.click_track import build_measure, write_measure, ClickTrackError, _shape
 
 
 class _FakePage:
@@ -89,6 +90,51 @@ def test_el_primer_golpe_del_compas_es_el_acento():
     _, picos, _ = _golpes(build_measure(72, 4))
     assert picos[0] > picos[1] * 1.2
     assert len(set(picos[1:4])) == 1               # los otros tres, todos iguales
+
+
+def _samples(data: bytes) -> array.array:
+    a = array.array("h")
+    a.frombytes(data)
+    return a
+
+
+def test_shape_seca_el_click_y_baja_el_volumen():
+    """`_shape` recorta la cola (queda SECO) y escala la amplitud."""
+    rate = 48000
+    largo = int(rate * 0.2)                         # click de 200 ms, amplitud 20000
+    frames = struct.pack(f"<{largo}h", *([20000] * largo))
+
+    seco = _samples(_shape(frames, rate, dry_ms=60.0))
+    assert len(seco) <= int(rate * 0.061)          # recortado a ~60 ms (no 200)
+    assert seco[-1] == 0                            # fundido de salida: cierra en 0
+
+    bajo = _samples(_shape(frames, rate, gain=0.5))
+    assert max(abs(v) for v in bajo) <= 10001       # a la mitad
+    assert len(bajo) == largo                       # sin dry_ms no se recorta
+
+
+def test_el_acento_es_seco_y_manda_sobre_los_normales():
+    """Regresión del carácter: el 1 va SECO (sin cola) y pega más que los normales.
+
+    Se mide en una pista lenta (los clicks no se pisan). La sequedad se comprueba
+    contra el propio acento: pasada su ventana seca, su cola cae a silencio (no
+    depende de la envolvente del golpe normal, que confundiría la medida).
+    """
+    data = build_measure(60, 4)                     # 1 s entre golpes: sin solape
+    _, picos, _ = _golpes(data)
+    assert picos[0] > max(picos[1:4]) * 1.5         # el acento resalta de sobra
+
+    rate = 48000
+    with wave.open(io.BytesIO(data), "rb") as w:
+        xs = struct.unpack(f"<{w.getnframes()}h", w.readframes(w.getnframes()))
+
+    def maxabs(desde_ms: float, hasta_ms: float) -> int:
+        return max((abs(v) for v in xs[int(desde_ms / 1000 * rate):
+                                       int(hasta_ms / 1000 * rate)]), default=0)
+
+    ataque = maxabs(0, 30)                           # el golpe 1 empieza en t=0
+    cola = maxabs(80, 130)                           # tras la ventana seca (~60 ms)
+    assert cola < ataque * 0.1                       # la cola cayó a silencio: es seco
 
 
 def test_sin_compas_definido_no_hay_acento():

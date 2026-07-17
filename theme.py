@@ -34,6 +34,9 @@ DARK: dict[str, str] = {
     # Acento de botones (tab activo, pill activo, FAB «＋») / peligro
     "accent":        "#f3d365",   # (R243 G211 B101)
     "danger":        "#c06060",
+    # Pulso del metrónomo en el golpe 1: verde, para distinguir el acento de un
+    # vistazo sin confundirlo con el dorado de los acordes.
+    "beat_one":      "#5fd38a",
 }
 
 # --- MEDIANOCHE: oscuro «dim». Azul profundo de la marca, menos contraste duro
@@ -52,6 +55,7 @@ MIDNIGHT: dict[str, str] = {
     "section_label": "#66719a",
     "accent":        "#f3d365",
     "danger":        "#d97b7b",
+    "beat_one":      "#5fd38a",   # pulso del golpe 1
 }
 
 # --- PERGAMINO: claro cálido. Papel crema de la marca, tinta azul marino y
@@ -70,6 +74,7 @@ PARCHMENT: dict[str, str] = {
     "section_label": "#a39668",
     "accent":        "#ad6023",   # ámbar de la marca (R173 G96 B35)
     "danger":        "#b04030",
+    "beat_one":      "#2e8b57",   # pulso del golpe 1: verde oscuro, se ve sobre el crema
 }
 
 # --- ALBA: claro frío. Blanco/gris azulado con el navy de la marca como única
@@ -88,6 +93,7 @@ DAWN: dict[str, str] = {
     "section_label": "#97a2b8",
     "accent":        "#19284b",
     "danger":        "#b03a3a",
+    "beat_one":      "#2e8b57",   # pulso del golpe 1: verde oscuro, se ve sobre el claro
 }
 
 # --- Registro ----------------------------------------------------------------

@@ -642,9 +642,11 @@ class PresentScreen:
             content=self._play_icon(), on_click=self._toggle_play,
             ink=True, padding=8, border_radius=20)
         if self._bpm is not None:
-            # El compás suena en bucle desde el motor de audio (no se dispara un
-            # click por golpe: eso iba a destiempo). Por eso aquí no hay ningún
-            # bucle de Python ni indicador que late: el tempo lo lleva el audio.
+            # El SONIDO lo lleva el motor de audio en bucle (no se dispara un click
+            # por golpe: eso iba a destiempo). No hay indicador que late: un pulso en
+            # pantalla corre con el reloj del sistema, el audio con el del hardware, y
+            # sin nada que los re-sincronice el desfase crecía hasta notarse. El acento
+            # va en el propio audio (golpe 1 seco y fuerte; ver utils/click_track.py).
             self._beats = beats_per_measure(song.rhythm)
             self._metro_sound = MetroSound(page)   # bucle (no-op sin flet-audio)
             self._metro_on = False
@@ -702,16 +704,14 @@ class PresentScreen:
     def _go_prev(self) -> None:
         """Detiene el metrónomo (si lo hay) antes de cambiar de canción."""
         if self._bpm is not None:
-            self._metro_on = False
-            self._metro_sound.stop()
+            self._detener_metro()
         if self.on_prev is not None:
             self.on_prev()
 
     def _go_next(self) -> None:
         """Detiene el metrónomo (si lo hay) antes de cambiar de canción."""
         if self._bpm is not None:
-            self._metro_on = False
-            self._metro_sound.stop()
+            self._detener_metro()
         if self.on_next is not None:
             self.on_next()
 
@@ -848,6 +848,12 @@ class PresentScreen:
         return ft.Icon(ft.Icons.STOP if running else ft.Icons.PLAY_ARROW, size=18,
                        color=theme.THEME["text"] if running else theme.THEME["text_muted"])
 
+    def _detener_metro(self) -> None:
+        """Detiene el metrónomo: el sonido y la bandera. Se usa al apagar el toggle
+        y al salir o cambiar de canción."""
+        self._metro_on = False
+        self._metro_sound.stop()
+
     def _toggle_metro(self, _e=None) -> None:
         """Arranca o detiene el bucle del compás."""
         if self._bpm is None:
@@ -856,7 +862,7 @@ class PresentScreen:
         if self._metro_on:
             self._metro_sound.start(self._bpm, self._beats)
         else:
-            self._metro_sound.stop()
+            self._detener_metro()
         if self._metro_toggle is not None:
             self._metro_toggle.content = self._metro_icon(self._metro_on)
             _safe_update(self._metro_toggle)
@@ -961,8 +967,7 @@ class PresentScreen:
     def _exit(self) -> None:
         self._playing = False                   # detiene el autoscroll al salir
         if self._bpm is not None:
-            self._metro_on = False
-            self._metro_sound.stop()                  # detiene el metrónomo al salir
+            self._detener_metro()                     # sonido + punto, al salir
         self.page.bgcolor = theme.THEME["bg"]   # devuelve el fondo del tema
         _safe_update(self.page)
         self.on_exit()
