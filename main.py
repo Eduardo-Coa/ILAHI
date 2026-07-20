@@ -20,12 +20,13 @@ from database.db import Database, UNKNOWN_AUTHOR, author_display
 from models.transposer import transpose_song
 import theme
 from sample_data import sample_songs, sample_setlist
-from views.song_list_view import SongsScreen
+from views.song_list_view import SongsScreen, show_add_sheet
 from views.author_list_view import AuthorsScreen
 from views.setlist_view import build_setlists, SetlistDetailScreen, SongPickerScreen
 from views.stage_view import StageScreen, PresentScreen
 from views.edit_view import NewSongScreen, EditSongScreen, EditLyricsScreen
 from views.settings_view import SettingsScreen
+from views.main_shell import MainShell, HOME_INDEX
 from views.widgets import show_toast
 from utils.prefs import get_pref, set_pref
 from utils.song_io import (
@@ -121,7 +122,54 @@ def main(page: ft.Page) -> None:
     file_picker = ft.FilePicker()
     page.services.append(file_picker)
 
-    def show(control: ft.Control) -> None:
+    # Estado de navegación: ``back`` = a dónde lleva el «atrás» del sistema desde la
+    # pantalla actual; ``leave`` = limpieza al abandonarla (p. ej. detener el
+    # metrónomo); ``is_main`` = estamos en el panel principal (el shell), donde el
+    # «atrás» tiene su propia lógica (ver _system_back).
+    _nav = {"back": None, "leave": None, "is_main": False}
+
+    async def _system_back(_e=None) -> None:
+        """Intercepta el «atrás» del sistema (gesto o botón) y navega DENTRO de la app,
+        en vez de dejar que Android cierre la app (que mandaba al inicio del teléfono,
+        porque la navegación es propia y no una pila de vistas de Flet).
+
+        - En el panel principal (shell): si no estamos en Canciones, va a Canciones;
+          si ya estamos ahí, se deja salir de la app (``confirm_pop(True)``).
+        - En una pantalla interna: ejecuta su «volver».
+
+        ``confirm_pop(False)`` cancela la salida pendiente (si no, expiraría por timeout)."""
+        if _nav["is_main"]:
+            shell = shell_state["shell"]
+            if shell is not None and shell.index != HOME_INDEX:
+                shell.goto(HOME_INDEX)
+                await page.views[0].confirm_pop(False)
+            else:
+                await page.views[0].confirm_pop(True)     # Canciones → cerrar la app
+            return
+        volver = _nav["back"]
+        if volver is not None:
+            volver()
+        await page.views[0].confirm_pop(False)
+
+    # La vista raíz siempre existe (page.controls es page.views[0].controls). Se le
+    # engancha el interceptor una vez; ``can_pop`` se alterna por pantalla en show().
+    page.views[0].on_confirm_pop = _system_back
+
+    def show(control: ft.Control, on_back=None, on_leave=None,
+             is_main: bool = False) -> None:
+        # Antes de reemplazar la pantalla se corre la limpieza de la SALIENTE (p. ej.
+        # el escenario detiene el metrónomo y el autoscroll), sin importar qué disparó
+        # la navegación —su ✕, un cambio de canción o el «atrás» del sistema, que salta
+        # el _exit de la vista—. Así el metrónomo no sigue sonando en la pantalla nueva.
+        leave = _nav["leave"]
+        if leave is not None:
+            leave()
+        _nav["back"] = on_back
+        _nav["leave"] = on_leave
+        _nav["is_main"] = is_main
+        # can_pop=False → el back lo maneja _system_back (navegar). Solo sería True si
+        # una pantalla no-principal no tuviera «volver», caso que hoy no existe.
+        page.views[0].can_pop = on_back is None and not is_main
         page.controls.clear()
         # SafeArea: evita que la barra de estado/notch se sobreponga a la barra superior
         page.add(ft.SafeArea(content=control, expand=True))
@@ -189,38 +237,120 @@ def main(page: ft.Page) -> None:
         go_home(status=await export_song_fn(db.load_song(song_id)))
 
     # ------------------------------------------------------------------
-    # Navegación
+    # Panel principal: shell con las 5 vistas (swipe + deslizamiento + barra fija).
+    # Secuencia: Autores · Canciones · Favoritos · Listas · Ajustes. Las funciones
+    # go_* siguen siendo los puntos de entrada (las pantallas hoja las usan para
+    # «volver» al panel en la vista correcta).
     # ------------------------------------------------------------------
-    def go_home(status: str = "", tab: str = "library",
-                author: str | None = None) -> None:
-        show(SongsScreen(
-            page, db, on_open_song=go_stage, on_open_setlists=go_setlists,
+    shell_state = {"shell": None}          # el MainShell activo (para el back del sistema)
+    main_state = {"author": None}          # autor elegido en Autores (drill-down)
+
+    def open_author_songs(name: str) -> None:
+        """Toca un autor → se QUEDA en Autores mostrando sus canciones (con el chip
+        debajo del buscador). No cambia de pestaña ni desliza: refresh en el sitio."""
+        main_state["author"] = name
+        if shell_state["shell"] is not None:
+            shell_state["shell"].refresh()
+
+    def clear_author() -> None:
+        """Quita el filtro por autor → vuelve a la lista de autores (misma vista)."""
+        main_state["author"] = None
+        if shell_state["shell"] is not None:
+            shell_state["shell"].refresh()
+
+    def _on_navigate(i: int) -> None:
+        """Al salir de Autores (deslizando o tocando otra pestaña) se suelta el autor
+        elegido, para que al volver se vea la lista de autores y no el drill-down."""
+        if i != 0:
+            main_state["author"] = None
+
+    def refresh_shell(status: str = "") -> None:
+        """Reconstruye la vista actual del shell (tras borrar/renombrar) + toast."""
+        if shell_state["shell"] is not None:
+            shell_state["shell"].rebuild()
+        if status:
+            show_toast(page, status)
+
+    def _goto(n: int) -> None:
+        if shell_state["shell"] is not None:
+            shell_state["shell"].goto(n)
+
+    def _songs_body(tab: str, query: str, author: str | None = None) -> ft.Control:
+        """Cuerpo de una lista de canciones embebida (buscador fijo del shell)."""
+        return SongsScreen(
+            page, db, on_open_song=go_stage, on_open_setlists=lambda: _goto(3),
             on_import=do_import, on_export_all=do_export_all,
             on_new_song=go_new_song, on_edit_song=go_edit_song,
-            on_export_song=do_export_song, on_open_authors=go_authors,
-            on_open_settings=go_settings,
-            tab=tab, author=author,
-        ).build())
+            on_export_song=do_export_song, on_open_authors=lambda: _goto(0),
+            on_open_settings=lambda: _goto(4), tab=tab, author=author,
+            embedded=True, external_search=True, query=query,
+            on_clear_author=clear_author if author else None).build()
+
+    def build_main_page(i: int, query: str = "") -> ft.Control:
+        """Cuerpo de la vista ``i`` filtrado por ``query`` (logo, toggle, buscador y
+        barra los pone el shell). En Autores con un autor elegido se muestran sus
+        canciones (drill-down); Favoritos/Listas traen su propio buscador."""
+        if i == 0 and main_state["author"] is None:     # Autores: lista de autores
+            return AuthorsScreen(
+                page, db, on_open_author=open_author_songs,
+                on_back=lambda: _goto(1), on_export_author=export_author_fn,
+                on_tab=None, embedded=True, external_search=True, query=query).build()
+        if i == 0:                          # Autores + autor elegido: SUS canciones
+            return _songs_body("library", query, author=main_state["author"])
+        if i == 1:                          # Canciones (todas)
+            return _songs_body("library", query)
+        if i == 2:                          # Favoritos
+            return _songs_body("favorites", query)
+        if i == 3:                          # Listas
+            return build_setlists(
+                db.list_setlists(), on_open=go_setlist_detail,
+                on_back=lambda: _goto(1), on_new=create_list,
+                on_tab=None, page=page, db=db, refresh=refresh_shell,
+                embedded=True, external_search=True, query=query)
+        return SettingsScreen(              # Ajustes
+            page, db=db, on_tab=None, on_theme_change=change_theme, embedded=True).build()
+
+    def search_hint(i: int) -> str | None:
+        """Placeholder del buscador fijo por vista (None solo en Ajustes)."""
+        if i == 0:
+            return "Buscar himno…" if main_state["author"] else "Buscar autor…"
+        if i == 1:
+            return "Buscar himno o autor…"
+        if i == 2:
+            return "Buscar en favoritos…"
+        if i == 3:
+            return "Buscar lista…"
+        return None
+
+    def open_add_sheet() -> None:
+        """Cuadro «Añadir» (nueva canción / importar / exportar), desde el ＋ del shell."""
+        show_add_sheet(page, go_new_song, do_import, do_export_all)
+
+    def fab_action(i: int):
+        """Qué hace el ＋ fijo por vista: en Canciones/Favoritos abre «Añadir»; en
+        Listas crea una lista; en Autores/Ajustes no hay ＋ (None → oculto)."""
+        if i in (1, 2):
+            return open_add_sheet
+        if i == 3:
+            return create_list
+        return None
+
+    def show_main(index: int = HOME_INDEX, status: str = "") -> None:
+        """Muestra el panel principal (shell) en la vista ``index``."""
+        shell = MainShell(page, build_main_page, search_hint=search_hint,
+                          on_navigate=_on_navigate, fab_action=fab_action, index=index)
+        shell_state["shell"] = shell
+        show(shell.build(), is_main=True)
         if status:
-            show_toast(page, status)     # confirmación flotante (toast)
+            show_toast(page, status)         # confirmación flotante (toast)
 
-    def go_authors() -> None:
-        show(AuthorsScreen(
-            page, db, on_open_author=lambda name: go_home(author=name),
-            on_back=go_home, on_export_author=export_author_fn,
-            on_tab=tab_from_authors,
-        ).build())
-
-    def tab_from_authors(key: str) -> None:
-        """Pestañas desde la lista de autores."""
-        if key == "library":
-            go_home()
-        elif key == "favorites":
-            go_home(tab="favorites")
-        elif key == "setlists":
-            go_setlists()
-        elif key == "settings":
-            go_settings()
+    def go_home(status: str = "", tab: str = "library",
+                author: str | None = None) -> None:
+        main_state["author"] = author        # None normalmente: suelta el drill-down
+        if author is not None:
+            show_main(0, status=status)      # Autores con ese autor (drill-down)
+        else:
+            show_main(2 if tab == "favorites" else HOME_INDEX, status=status)
 
     async def export_author_fn(author: str) -> str:
         """Exporta el cancionero de un autor; devuelve el mensaje de estado."""
@@ -240,7 +370,8 @@ def main(page: ft.Page) -> None:
         return msg or f"✓ Exportadas {len(songs)} canciones de «{etiqueta}»"
 
     def go_new_song() -> None:
-        show(NewSongScreen(db, on_created=go_edit_song, on_back=go_home).build())
+        show(NewSongScreen(db, on_created=go_edit_song, on_back=go_home).build(),
+             on_back=go_home)
 
     def go_edit_song(song_id: int, on_done=None) -> None:
         # Al cerrar el editor se vuelve a la vista de canción; ``on_done`` permite
@@ -249,13 +380,14 @@ def main(page: ft.Page) -> None:
         song = db.load_song(song_id)
         show(EditSongScreen(db, song, on_back=volver,
                             on_edit_lyrics=lambda sid: go_edit_lyrics(sid, on_done),
-                            page=page).build())
+                            page=page).build(), on_back=volver)
 
     def go_edit_lyrics(song_id: int, on_done=None) -> None:
+        volver = lambda: go_edit_song(song_id, on_done)
         song = db.load_song(song_id)
         show(EditLyricsScreen(db, song,
                               on_saved=lambda sid: go_edit_song(sid, on_done),
-                              on_back=lambda: go_edit_song(song_id, on_done)).build())
+                              on_back=volver).build(), on_back=volver)
 
     def persist_transpose(song, delta: int):
         """Transpone la canción y la guarda como su nuevo tono. Devuelve la recargada."""
@@ -269,45 +401,24 @@ def main(page: ft.Page) -> None:
                          on_edit=go_edit_song, on_edit_lyrics=go_edit_lyrics,
                          on_present=go_present,
                          on_persist_key=persist_transpose,
-                         size=stage_size, on_size_change=save_stage_size).build())
+                         size=stage_size, on_size_change=save_stage_size).build(),
+             on_back=go_home)
 
     def go_present(song, offset: int, size: int | None = None) -> None:
         # ``size`` viene del «Aa» de la vista de canción: el escenario hereda su
         # fuente. Si no viene, se usa la guardada en preferencias.
-        show(PresentScreen(page, song, offset, on_exit=lambda: go_stage(song.id),
-                           size=size if size is not None else stage_size).build())
+        volver = lambda: go_stage(song.id)
+        screen = PresentScreen(page, song, offset, on_exit=volver,
+                               size=size if size is not None else stage_size)
+        # on_leave: al abandonar el escenario (incluido el «atrás» del sistema) se
+        # detiene el metrónomo/autoscroll, que si no seguían en la pantalla anterior.
+        show(screen.build(), on_back=volver, on_leave=screen.stop)
 
     def go_setlists(status: str = "") -> None:
-        show(build_setlists(db.list_setlists(), on_open=go_setlist_detail,
-                            on_back=go_home, on_new=create_list,
-                            on_tab=tab_from_setlists,
-                            page=page, db=db, refresh=go_setlists))
-        if status:
-            show_toast(page, status)     # confirmación flotante (toast)
-
-    def tab_from_setlists(key: str) -> None:
-        """Pestañas de la barra inferior desde la vista de listas."""
-        if key == "library":
-            go_home()
-        elif key == "favorites":
-            go_home(tab="favorites")
-        elif key == "settings":
-            go_settings()
-        # "setlists": ya estamos aquí
+        show_main(3, status=status)
 
     def go_settings() -> None:
-        show(SettingsScreen(page, db=db, on_tab=tab_from_settings,
-                            on_theme_change=change_theme).build())
-
-    def tab_from_settings(key: str) -> None:
-        """Pestañas de la barra inferior desde Ajustes."""
-        if key == "library":
-            go_home()
-        elif key == "favorites":
-            go_home(tab="favorites")
-        elif key == "setlists":
-            go_setlists()
-        # "settings": ya estamos aquí
+        show_main(4)
 
     def create_list() -> None:
         # Primero se pide el nombre con un cuadro flotante (mismo diseño que los demás).
@@ -341,13 +452,13 @@ def main(page: ft.Page) -> None:
             on_deleted=go_setlists, editing=editing,
             on_present=go_present_in_setlist,       # ▶ → escenario de la lista
             page=page,
-        ).build())
+        ).build(), on_back=go_setlists)
 
     def go_add_songs(setlist_id: int) -> None:
+        volver = lambda: go_setlist_detail(setlist_id)
         show(SongPickerScreen(
-            db, setlist_id, page=page,
-            on_back=lambda: go_setlist_detail(setlist_id),
-        ).build())
+            db, setlist_id, page=page, on_back=volver,
+        ).build(), on_back=volver)
 
     def go_stage_in_setlist(setlist, index: int) -> None:
         item = setlist.items[index]
@@ -374,7 +485,7 @@ def main(page: ft.Page) -> None:
             # El 3er argumento es el tamaño de fuente que trae esta vista («Aa»).
             on_present=lambda s, o, size: go_present_in_setlist(setlist, index, size),
             size=stage_size, on_size_change=save_stage_size,
-        ).build())
+        ).build(), on_back=lambda: go_setlist_detail(setlist.id))
 
     def go_present_in_setlist(setlist, index: int,
                               size: int | None = None) -> None:
@@ -394,13 +505,15 @@ def main(page: ft.Page) -> None:
         last = len(setlist.items) - 1
         on_next = ((lambda: go_present_in_setlist(setlist, index + 1, size))
                    if index < last else None)
-        show(PresentScreen(
+        volver = lambda: go_stage_in_setlist(setlist, index)
+        screen = PresentScreen(
             page, song, item.transpose,
-            on_exit=lambda: go_stage_in_setlist(setlist, index),
+            on_exit=volver,
             on_prev=on_prev, on_next=on_next,
             position_label=f"{index + 1}/{len(setlist.items)}",
             size=size,
-        ).build())
+        )
+        show(screen.build(), on_back=volver, on_leave=screen.stop)
 
     go_home()
 

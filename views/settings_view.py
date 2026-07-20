@@ -15,6 +15,7 @@ import flet as ft
 
 import theme
 from views.bottom_bar import build_bottom_bar
+from views.widgets import logo_header
 
 
 # ---------------------------------------------------------------------------
@@ -101,19 +102,16 @@ class SettingsScreen:
 
     def __init__(self, page: ft.Page, db=None,
                  on_tab: Callable[[str], None] | None = None,
-                 on_theme_change: Callable[[str], None] | None = None) -> None:
+                 on_theme_change: Callable[[str], None] | None = None,
+                 embedded: bool = False) -> None:
         self.page = page
         self.db = db
         self.on_tab = on_tab
         self.on_theme_change = on_theme_change
+        # Embebida en el shell: el logo lo fija el shell (aquí se omite).
+        self.embedded = embedded
 
     def build(self) -> ft.Control:
-        # Mismo header que las demás pestañas: solo el logo centrado.
-        header = ft.Container(
-            padding=ft.Padding.only(top=16, bottom=6),
-            alignment=ft.Alignment.CENTER,
-            content=ft.Image(src=theme.logo(), height=52, fit=ft.BoxFit.CONTAIN),
-        )
         body = ft.ListView(
             expand=True, padding=ft.Padding.only(top=2, bottom=16),
             controls=[
@@ -153,7 +151,10 @@ class SettingsScreen:
                      "App para guitarristas de iglesia", trailing=_chevron()),
             ],
         )
-        children: list[ft.Control] = [header, body]
+        children: list[ft.Control] = []
+        if not self.embedded:                # embebida: el logo lo fija el shell
+            children.append(logo_header())
+        children.append(body)
         if self.on_tab is not None:
             children.append(build_bottom_bar("settings", self.on_tab))
         return ft.Column(children, expand=True, spacing=0)

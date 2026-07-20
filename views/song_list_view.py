@@ -15,8 +15,45 @@ import flet as ft
 import theme
 from views.bottom_bar import TABS as _TABS, build_bottom_bar, fill_bar
 from views.search_field import search_pill, filter_chip
-from views.widgets import sheet_option as _sheet_option, show_toast, segmented_toggle
+from views.widgets import (sheet_option as _sheet_option, show_toast,
+                           segmented_toggle, logo_header)
 from database.db import author_display
+
+
+def show_add_sheet(page, on_new: Callable[[], None], on_import: Callable,
+                   on_export_all: Callable) -> None:
+    """Cuadro flotante «Añadir»: nueva canción · importar · exportar biblioteca.
+
+    Vive a nivel de módulo (no en la pantalla) porque el botón ＋ ahora es fijo del
+    shell y lo comparten Canciones y Favoritos; el shell lo abre desde aquí."""
+    async def do_import(_e=None) -> None:
+        page.pop_dialog()
+        await on_import()
+
+    async def do_export_all(_e=None) -> None:
+        page.pop_dialog()
+        await on_export_all()
+
+    def do_new(_e=None) -> None:
+        page.pop_dialog()
+        on_new()
+
+    page.show_dialog(ft.AlertDialog(
+        modal=False,
+        shape=ft.RoundedRectangleBorder(radius=20),
+        bgcolor=theme.THEME["surface2"],
+        title=ft.Text("Añadir", size=18, weight=ft.FontWeight.BOLD,
+                      color=theme.THEME["text"]),
+        content_padding=ft.Padding.only(left=8, right=8, bottom=8),
+        content=ft.Column(tight=True, spacing=2, controls=[
+            _sheet_option(ft.Icons.ADD, "Nueva canción",
+                          "Escribe o pega la letra", do_new),
+            _sheet_option(ft.Icons.DOWNLOAD, "Importar…",
+                          "Una canción o un cancionero .hymnchords", do_import),
+            _sheet_option(ft.Icons.UPLOAD, "Exportar biblioteca",
+                          "Todas tus canciones en un archivo", do_export_all),
+        ]),
+    ))
 
 
 class SongsScreen:
@@ -31,7 +68,9 @@ class SongsScreen:
                  on_open_authors: Callable[[], None],
                  on_open_settings: Callable[[], None] | None = None,
                  status: str = "", tab: str = "library",
-                 author: str | None = None) -> None:
+                 author: str | None = None, embedded: bool = False,
+                 external_search: bool = False, query: str = "",
+                 on_clear_author: Callable[[], None] | None = None) -> None:
         self.page = page
         self.db = db
         self.on_open_song = on_open_song
@@ -46,7 +85,15 @@ class SongsScreen:
         self.status = status
         self._tab = tab                         # "library" | "favorites"
         self._author = author                   # filtro activo por autor
-        self._query = ""
+        # Embebida en el shell del panel principal: la barra inferior la pone el shell
+        # (no esta pantalla) y el swipe entre vistas ya cubre Autores/Canciones.
+        self.embedded = embedded
+        # ``external_search``: el buscador lo pone el shell (fijo, arriba); aquí se
+        # omite y el filtro llega en ``query``. ``on_clear_author``: quitar el chip lo
+        # maneja el shell (vuelve a la lista de autores), no solo el refill interno.
+        self.external_search = external_search
+        self.on_clear_author = on_clear_author
+        self._query = query
         self._confirm_delete_id: int | None = None
         self._list = ft.ListView(expand=True, controls=[])
         self._bar = ft.Row(spacing=0)
@@ -54,18 +101,25 @@ class SongsScreen:
     # ------------------------------------------------------------------
     def build(self) -> ft.Control:
         self._refill(update=False)
-        header = ft.Container(
-            padding=ft.Padding.only(top=16, bottom=6),
-            alignment=ft.Alignment.CENTER,          # logo centrado
-            content=ft.Image(src=theme.logo(), height=52,
-                             fit=ft.BoxFit.CONTAIN),
-        )
-        children: list[ft.Control] = [header, self._author_chip()]
-        children.append(self._search_field())
-        children.append(self._toggle())          # Autores | Canciones, bajo la búsqueda
+        # Embebida en el shell, el logo, el toggle Autores|Canciones y la barra
+        # inferior son chrome FIJO que pone el shell; aquí solo va el cuerpo que se
+        # desliza (filtro por autor + búsqueda + lista).
+        children: list[ft.Control] = []
+        if not self.embedded:
+            children.append(logo_header())
+        # El chip del autor va arriba del cuerpo (queda justo debajo del buscador,
+        # que embebido es fijo y lo pone el shell).
+        children.append(self._author_chip())
+        if not self.external_search:             # el buscador fijo lo pone el shell
+            children.append(self._search_field())
+        if not self.embedded:
+            children.append(self._toggle())      # Autores | Canciones, bajo la búsqueda
         children.append(self._list)
-        children.append(self._bottom_bar())
+        if not self.embedded:
+            children.append(self._bottom_bar())
         column = ft.Column(children, expand=True, spacing=0)
+        if self.embedded:                    # embebida: el ＋ es fijo y lo pone el shell
+            return column
         # El ＋ flota sobre la lista, justo encima de la barra inferior.
         return ft.Stack(expand=True, controls=[column, self._fab()])
 
@@ -76,7 +130,7 @@ class SongsScreen:
         """Muestra el filtro activo por autor y permite quitarlo."""
         self._chip_box = filter_chip(
             author_display(self._author) if self._author else "",
-            self._clear_author, visible=bool(self._author))
+            self.on_clear_author or self._clear_author, visible=bool(self._author))
         self._chip_label = self._chip_box.content.controls[1]
         # Alineado a la izquierda: sin esto el chip ocuparía todo el ancho.
         return ft.Row([self._chip_box], tight=True)
@@ -103,7 +157,9 @@ class SongsScreen:
     def _fab(self) -> ft.Control:
         """FAB flotante abajo a la derecha, por encima de la barra inferior."""
         return ft.Container(
-            right=18, bottom=90,
+            # Embebida, la barra inferior está fuera de esta pantalla (la pone el
+            # shell), así que el FAB baja para no quedar flotando alto.
+            right=18, bottom=90 if not self.embedded else 24,
             content=ft.FloatingActionButton(
                 icon=ft.Icons.ADD, tooltip="Añadir",
                 bgcolor=theme.THEME["accent"], foreground_color=theme.THEME["bg"],
@@ -112,36 +168,7 @@ class SongsScreen:
         )
 
     def _open_add_sheet(self) -> None:
-        """Cuadro con esquinas redondeadas: nueva canción, importar, exportar."""
-        async def do_import(_e=None) -> None:
-            self.page.pop_dialog()
-            await self.on_import()
-
-        async def do_export_all(_e=None) -> None:
-            self.page.pop_dialog()
-            await self.on_export_all()
-
-        def do_new(_e=None) -> None:
-            self.page.pop_dialog()
-            self.on_new_song()
-
-        dialog = ft.AlertDialog(
-            modal=False,
-            shape=ft.RoundedRectangleBorder(radius=20),
-            bgcolor=theme.THEME["surface2"],
-            title=ft.Text("Añadir", size=18, weight=ft.FontWeight.BOLD,
-                          color=theme.THEME["text"]),
-            content_padding=ft.Padding.only(left=8, right=8, bottom=8),
-            content=ft.Column(tight=True, spacing=2, controls=[
-                _sheet_option(ft.Icons.ADD, "Nueva canción",
-                              "Escribe o pega la letra", do_new),
-                _sheet_option(ft.Icons.DOWNLOAD, "Importar…",
-                              "Una canción o un cancionero .hymnchords", do_import),
-                _sheet_option(ft.Icons.UPLOAD, "Exportar biblioteca",
-                              "Todas tus canciones en un archivo", do_export_all),
-            ]),
-        )
-        self.page.show_dialog(dialog)
+        show_add_sheet(self.page, self.on_new_song, self.on_import, self.on_export_all)
 
     # ------------------------------------------------------------------
     # Barra inferior de navegación

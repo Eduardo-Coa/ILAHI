@@ -573,9 +573,20 @@ _PANEL_H = 60          # solo la fila de velocidad (play + slider)
 _PANEL_H_METRO = 100   # velocidad + metrónomo
 _PANEL_MARGIN = 10     # margen inferior del panel (ver _panel)
 
-# Autoscroll. La velocidad se mide en **píxeles por segundo**, no en píxeles por
-# tick: así el slider significa lo mismo aunque cambie la cadencia del bucle.
-_TICK = 0.1                  # segundos entre pasos
+# Autoscroll. La velocidad se mide en **píxeles por segundo**.
+#
+# El deslizamiento es UNA sola animación nativa hasta el final (``_launch_glide``):
+# Flutter la corre entera del lado de Dart, suave y sin que Python toque el scroll por
+# el camino. La versión anterior empujaba el scroll cada 100 ms con un ``scroll_to``
+# animado; encadenar animaciones cortas con su easing hacía un pulso en cada costura
+# (~10 por segundo) que en el teléfono se veía entrecortado —peor a alta velocidad y
+# apenas perceptible a la mínima—. La curva LINEAL (sin easing) es lo que la hace
+# pareja de punta a punta.
+#
+# Un bucle liviano (``_autoscroll``) SUPERVISA, no anima: casi siempre solo duerme;
+# relanza la animación cuando cambió algo (velocidad, o el usuario arrastró y su turno
+# caducó) y la detiene al llegar al final.
+_TICK = 0.1                  # segundos entre chequeos del supervisor
 _SPEED_MIN = 4.0             # px/s: apenas se mueve
 _SPEED_MAX = 90.0            # px/s
 _SPEED_DEFAULT = 18.0
@@ -620,7 +631,8 @@ class PresentScreen:
         self.size = size
         self._speed = _SPEED_DEFAULT  # píxeles por segundo
         self._playing = False
-        self._running = False         # evita lanzar dos bucles a la vez
+        self._running = False         # evita lanzar dos supervisores a la vez
+        self._needs_restart = False   # relanzar la animación (velocidad nueva o tras arrastrar)
         self._pixels = 0.0            # posición real del scroll (la reporta on_scroll)
         self._user_hold = 0.0         # hasta cuándo manda el usuario (ver _user_moving)
         self._max_extent: float | None = None   # None = aún no la sabemos
@@ -881,38 +893,43 @@ class PresentScreen:
 
     def _on_speed(self, e) -> None:
         self._speed = float(e.control.value)
+        # Con la nueva velocidad, la animación en curso ya no dura lo que debe: se marca
+        # para relanzarla desde donde va la letra (el supervisor la toma en el próximo
+        # chequeo). En pausa no hay animación que relanzar.
+        if self._playing:
+            self._needs_restart = True
 
     def _user_moving(self) -> bool:
         """¿Manda el usuario ahora mismo? Su turno caduca solo (ver ``_USER_GRACE``)."""
         return time.monotonic() < self._user_hold
 
     def _on_scroll(self, e) -> None:
-        """Sigue la posición del scroll, distinguiendo QUIÉN mueve la pantalla.
+        """Sigue la posición del scroll y distingue si manda el usuario.
 
-        - El autoscroll: su animación reporta posiciones a mitad de camino; hacerles
-          caso frenaría el avance (cada paso arrancaría desde antes del destino), así
-          que se ignoran.
-        - El usuario (dedo o rueda): manda él. Se anota dónde deja la pantalla para
-          que el autoscroll siga desde ahí en vez de devolverla.
+        El deslizamiento del autoscroll es UNA animación nativa hacia el final (ver
+        ``_launch_glide``): sus posiciones intermedias ya no pueden frenar el avance
+        —el destino es fijo—, así que aquí se sigue SIEMPRE la posición real. Hace
+        falta para pausar o retomar (tras arrastrar o cambiar la velocidad) desde donde
+        va la letra AHORA, no desde donde arrancó la animación.
 
         ``USER`` solo lo dispara el usuario, nunca el autoscroll: por eso abre su
-        turno. El turno se RENUEVA con cada movimiento (mientras el autoscroll cede,
-        él no mueve nada, así que todo movimiento es del usuario o de su inercia) y
-        CADUCA solo al dejar de moverse. Así no depende de recibir el evento final
-        —que el límite de eventos puede descartar— y nunca se queda colgado.
+        turno. El turno se RENUEVA con cada movimiento y CADUCA solo al dejar de
+        moverse. Así no depende de recibir el evento final —que el límite de eventos
+        puede descartar— y nunca se queda colgado cediéndole el mando.
         """
         self._max_extent = e.max_scroll_extent or 0.0
         movimiento = e.event_type in (ft.ScrollType.UPDATE, ft.ScrollType.OVERSCROLL)
-        if (e.event_type == ft.ScrollType.USER
-                and e.direction in (ft.ScrollDirection.FORWARD,
-                                    ft.ScrollDirection.REVERSE)):
-            self._user_hold = time.monotonic() + _USER_GRACE      # abre su turno
-        elif movimiento and self._user_moving():
-            self._user_hold = time.monotonic() + _USER_GRACE      # lo renueva
-        # Se sigue la posición real cuando el autoscroll NO manda: en pausa, o
-        # mientras la mueve el usuario.
-        if not self._playing or self._user_moving():
-            self._pixels = e.pixels or 0.0
+        gesto = (e.event_type == ft.ScrollType.USER
+                 and e.direction in (ft.ScrollDirection.FORWARD,
+                                     ft.ScrollDirection.REVERSE))
+        if gesto or (movimiento and self._user_moving()):
+            self._user_hold = time.monotonic() + _USER_GRACE      # abre/renueva su turno
+            # Tocar la pantalla cancela la animación nativa, así que SIEMPRE habrá que
+            # relanzarla al soltar. Se marca aquí, no en el supervisor, porque un
+            # arrastre corto (o su inercia) puede caber entre dos chequeos y entonces
+            # ningún tick vería el gesto: quedaría quieto hasta tocar el slider.
+            self._needs_restart = True
+        self._pixels = e.pixels or 0.0
         if e.event_type == ft.ScrollType.END:
             # Se detuvo del todo: ya se anotó la posición final, el turno se cierra
             # sin esperar a que caduque (el autoscroll retoma enseguida).
@@ -926,48 +943,100 @@ class PresentScreen:
 
     def _toggle_play(self, _e=None) -> None:
         self._set_playing(not self._playing)
-        if self._playing and not self._running:
-            self.page.run_task(self._autoscroll)
+        if self._playing:
+            self._needs_restart = True           # el supervisor lanzará la animación
+            if not self._running:
+                self.page.run_task(self._autoscroll)
+        else:
+            # Pausa: la animación nativa sigue viva en Flutter aunque el bucle pare, así
+            # que hay que cortarla y dejar la letra donde va ahora.
+            self.page.run_task(self._freeze)
 
     def _at_end(self) -> bool:
         """¿Llegamos al final? ``max_extent`` en 0 significa que todo cabe en pantalla."""
         return self._max_extent is not None and self._pixels >= self._max_extent - 0.5
 
     async def _autoscroll(self) -> None:
+        """Supervisor: NO anima cuadro a cuadro (eso lo hace Flutter en ``_launch_glide``);
+        solo lanza/relanza la animación cuando hace falta y la detiene al final. Casi
+        todos los giros solo duermen."""
         self._running = True
         try:
             while self._playing:
                 if self._user_moving():
-                    # El usuario está moviendo la pantalla: no se le forza el scroll.
-                    # Cuando su turno caduque, ``_pixels`` ya trae dónde la dejó y se
-                    # sigue desde ahí (p. ej. arrastrar al inicio para repetir, sin
+                    # El usuario mueve la pantalla; su arrastre ya canceló la animación
+                    # nativa y ``_on_scroll`` marcó el relanzado. Se cede hasta que su
+                    # turno caduque; entonces ``_pixels`` trae dónde dejó la letra y se
+                    # relanza desde ahí (p. ej. arrastrar al inicio para repetir, sin
                     # volver a dar ▶).
                     await asyncio.sleep(_TICK)
                     continue
                 if self._at_end():
                     self._set_playing(False)     # se detiene solo y el ícono vuelve a ▶
                     break
-                destino = self._pixels + self._speed * _TICK
-                if self._max_extent is not None:
-                    destino = min(destino, self._max_extent)
-                try:
-                    await self._body.scroll_to(   # scroll_to es async en Flet 0.85
-                        offset=destino,
-                        duration=ft.Duration(milliseconds=int(_TICK * 1000)))
-                except Exception:
-                    # Si el ListView ya no está montado, el bucle muere: el ícono
-                    # no puede quedarse en ⏸ diciendo que sigue tocando.
-                    self._set_playing(False)
-                    break
-                self._pixels = destino
+                if self._max_extent is None:
+                    # Aún no sabemos el largo total (el primer evento de scroll no llegó):
+                    # un pasito corto lo revela y de paso avanza.
+                    await self._scroll_step()
+                elif self._needs_restart:
+                    self._needs_restart = False
+                    await self._launch_glide()
                 await asyncio.sleep(_TICK)
         finally:
             self._running = False
 
-    def _exit(self) -> None:
-        self._playing = False                   # detiene el autoscroll al salir
+    async def _launch_glide(self) -> None:
+        """Lanza UNA animación nativa, lineal, desde donde va la letra hasta el final.
+
+        La duración sale de la distancia que falta y la velocidad, así el ritmo es el
+        del slider. Al ser una sola animación (y sin easing) Flutter la corre pareja,
+        sin las costuras del empuje por pasos."""
+        restante = (self._max_extent or 0.0) - self._pixels
+        if restante <= 0.5:
+            self._set_playing(False)
+            return
+        ms = max(1, int(restante / self._speed * 1000))
+        try:
+            await self._body.scroll_to(       # scroll_to es async en Flet 0.85
+                offset=self._max_extent, duration=ms,
+                curve=ft.AnimationCurve.LINEAR)
+        except Exception:
+            # Si el ListView ya no está montado, el bucle muere: el ícono no puede
+            # quedarse en ⏸ diciendo que sigue tocando.
+            self._set_playing(False)
+
+    async def _scroll_step(self) -> None:
+        """Bootstrap: mientras no se conoce ``max_extent`` se avanza a pasos cortos (que
+        además provocan el evento de scroll que lo revela). En cuanto se sabe, el
+        supervisor pasa a ``_launch_glide`` y esto no se usa más."""
+        destino = self._pixels + self._speed * _TICK
+        try:
+            await self._body.scroll_to(offset=destino, duration=int(_TICK * 1000),
+                                       curve=ft.AnimationCurve.LINEAR)
+        except Exception:
+            self._set_playing(False)
+            return
+        self._pixels = destino
+
+    async def _freeze(self) -> None:
+        """Corta la animación nativa dejando la letra donde va ahora (un ``scroll_to`` de
+        duración 0 a la posición actual reemplaza a la animación en curso)."""
+        try:
+            await self._body.scroll_to(offset=self._pixels, duration=0)
+        except Exception:
+            pass
+
+    def stop(self) -> None:
+        """Detiene la reproducción (autoscroll + metrónomo) y restaura el fondo del
+        tema, SIN navegar. Se llama al salir por cualquier vía —la ✕, cambiar de
+        canción y también el «atrás» del sistema, que salta ``_exit``— para que el
+        metrónomo no siga sonando en la pantalla anterior. Es idempotente."""
+        self._playing = False                   # detiene el autoscroll
         if self._bpm is not None:
-            self._detener_metro()                     # sonido + punto, al salir
+            self._detener_metro()               # detiene el sonido del metrónomo
         self.page.bgcolor = theme.THEME["bg"]   # devuelve el fondo del tema
         _safe_update(self.page)
+
+    def _exit(self) -> None:
+        self.stop()
         self.on_exit()

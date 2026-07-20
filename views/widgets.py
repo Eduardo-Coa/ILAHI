@@ -127,6 +127,77 @@ def segmented_toggle(left_label: str, right_label: str, active: str,
             on_horizontal_drag_update=_track, on_horizontal_drag_end=_end))
 
 
+class SlidingToggle:
+    """Toggle de dos segmentos cuya píldora se DESLIZA al cambiar de lado.
+
+    A diferencia de ``segmented_toggle`` (que se reconstruye y por eso salta), este
+    vive una sola vez: ``set_active`` mueve la píldora y ella sola se anima.
+
+    La píldora ocupa media pista —una celda ``expand=1`` de un Row de dos—, así su
+    ``offset.x`` de 0 a 1 la corre exactamente al otro lado SIN necesidad de saber el
+    ancho en píxeles (que en Flet no se conoce al construir).
+
+    Se mueve con ``set_active``, tanto al tocar un segmento como cuando el shell
+    termina de deslizarse a la otra vista.
+    """
+
+    _H = 34          # alto de la pista y de la píldora (deben coincidir)
+    _ANIM = 220      # ms del deslizamiento cuando se toca (no cuando se arrastra)
+
+    def __init__(self, left_label: str, right_label: str,
+                 on_left: Callable[[], None], on_right: Callable[[], None],
+                 active: str = "right") -> None:
+        self.left_label, self.right_label = left_label, right_label
+        self.on_left, self.on_right = on_left, on_right
+        self.active = active
+        self._pill = ft.Container(
+            expand=1, height=self._H, border_radius=16,
+            bgcolor=theme.THEME["accent"],
+            offset=ft.Offset(1 if active == "right" else 0, 0),
+            animate_offset=ft.Animation(self._ANIM, ft.AnimationCurve.EASE_OUT))
+        self._left_txt = self._label(left_label, active == "left")
+        self._right_txt = self._label(right_label, active == "right")
+
+    def _label(self, text: str, is_active: bool) -> ft.Text:
+        return ft.Text(text, size=14, weight=ft.FontWeight.W_600,
+                       text_align=ft.TextAlign.CENTER,
+                       color=theme.THEME["bg"] if is_active else theme.THEME["text_muted"])
+
+    def _segment(self, txt: ft.Text, cb) -> ft.Control:
+        return ft.Container(expand=1, height=self._H, border_radius=16, ink=True,
+                            alignment=ft.Alignment.CENTER,
+                            on_click=lambda _e: cb(), content=txt)
+
+    def build(self) -> ft.Control:
+        # Capa de la píldora DEBAJO y las etiquetas encima (por eso va primera).
+        pista = ft.Row([self._pill, ft.Container(expand=1, height=self._H)], spacing=0)
+        etiquetas = ft.Row([self._segment(self._left_txt, self.on_left),
+                            self._segment(self._right_txt, self.on_right)], spacing=0)
+        return ft.Container(
+            margin=ft.Margin.symmetric(horizontal=40, vertical=4),
+            padding=ft.Padding.all(3),
+            bgcolor=theme.THEME["surface"], border_radius=18,
+            content=ft.Stack([pista, etiquetas], height=self._H),
+        )
+
+    def _paint_labels(self, side: str) -> None:
+        self._left_txt.color = (theme.THEME["bg"] if side == "left"
+                                else theme.THEME["text_muted"])
+        self._right_txt.color = (theme.THEME["bg"] if side == "right"
+                                 else theme.THEME["text_muted"])
+        _safe_update(self._left_txt)
+        _safe_update(self._right_txt)
+
+    def set_active(self, side: str) -> None:
+        """Mueve la píldora al lado dado (se desliza sola) y recolorea las etiquetas."""
+        if side not in ("left", "right"):
+            return
+        self.active = side
+        self._pill.offset = ft.Offset(1 if side == "right" else 0, 0)
+        _safe_update(self._pill)
+        self._paint_labels(side)
+
+
 def sheet_option(icon: str, title: str, subtitle: str, on_click) -> ft.Control:
     """Fila de un cuadro/menú (Añadir, Editar…): ícono, título y una línea de ayuda."""
     return ft.Container(
@@ -200,6 +271,18 @@ def square_button(icon: str, tooltip: str, on_click: Callable[[], None]) -> ft.C
 def back_button(on_back: Callable[[], None]) -> ft.Control:
     """Flecha ← arriba a la izquierda."""
     return square_button(ft.Icons.ARROW_BACK, "Volver", on_back)
+
+
+def logo_header() -> ft.Control:
+    """Panel superior con el logo de la marca centrado (la versión según el tema).
+
+    Es el mismo en todas las vistas del panel principal; el shell lo fija arriba y
+    las pantallas embebidas lo omiten (no se repite ni se desliza)."""
+    return ft.Container(
+        padding=ft.Padding.only(top=16, bottom=6),
+        alignment=ft.Alignment.CENTER,
+        content=ft.Image(src=theme.logo(), height=52, fit=ft.BoxFit.CONTAIN),
+    )
 
 
 def circle_button(label: str, on_click, diameter: int = 56,

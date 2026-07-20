@@ -13,15 +13,19 @@ import theme
 
 
 def search_pill(hint: str, on_change: Callable, trailing: ft.Control | None = None,
-                value: str = "") -> ft.Control:
-    """Píldora de búsqueda: lupa · campo · (opcional) control de filtros a la derecha."""
-    field = ft.TextField(
-        value=value, hint_text=hint, on_change=on_change,
-        expand=True, border=ft.InputBorder.NONE, dense=True,
-        content_padding=ft.Padding.symmetric(vertical=10),
-        color=theme.THEME["text"], cursor_color=theme.THEME["accent"],
-        hint_style=ft.TextStyle(color=theme.THEME["text_muted"], size=15),
-    )
+                value: str = "", field: ft.TextField | None = None) -> ft.Control:
+    """Píldora de búsqueda: lupa · campo · (opcional) control de filtros a la derecha.
+
+    ``field`` permite reutilizar un ``TextField`` propio (p. ej. el buscador FIJO del
+    shell, que sobrevive al cambio de vista y solo cambia su ``hint_text``)."""
+    if field is None:
+        field = ft.TextField(
+            value=value, hint_text=hint, on_change=on_change,
+            expand=True, border=ft.InputBorder.NONE, dense=True,
+            content_padding=ft.Padding.symmetric(vertical=10),
+            color=theme.THEME["text"], cursor_color=theme.THEME["accent"],
+            hint_style=ft.TextStyle(color=theme.THEME["text_muted"], size=15),
+        )
     controls: list[ft.Control] = [
         ft.Icon(ft.Icons.SEARCH, size=20, color=theme.THEME["text_muted"]),
         field,

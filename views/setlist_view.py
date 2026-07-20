@@ -14,7 +14,7 @@ import flet as ft
 from models.setlist import SetlistItem
 from models.transposer import transpose_chord, transpose_song
 from views.bottom_bar import build_bottom_bar
-from views.widgets import centered_header, back_button, square_button, show_toast
+from views.widgets import centered_header, back_button, square_button, show_toast, logo_header
 from views.search_field import search_pill
 import theme
 
@@ -134,21 +134,17 @@ def build_setlists(setlists: list[dict], on_open: Callable[[int], None],
                    on_back: Callable[[], None], on_new: Callable[[], None],
                    on_tab: Callable[[str], None] | None = None,
                    status: str = "", page=None, db=None,
-                   refresh: Callable[[str], None] | None = None) -> ft.Control:
+                   refresh: Callable[[str], None] | None = None,
+                   embedded: bool = False, external_search: bool = False,
+                   query: str = "") -> ft.Control:
     """Índice de listas + botón para crear una nueva + barra inferior.
 
     ``page``/``db``/``refresh`` habilitan el menú ⋮ por lista (editar nombre /
     eliminar); ``refresh(status)`` vuelve a construir la vista tras un cambio.
+    ``embedded``: dentro del shell, el logo y el ＋ los fija el shell (aquí se
+    omiten). ``external_search``: el buscador también es del shell; el filtro llega
+    en ``query`` y aquí no se dibuja la píldora.
     """
-    # Mismo panel superior que el inicio y autores: solo el logo centrado (la
-    # pestaña «Listas» de la barra inferior ya indica dónde estamos), y debajo la
-    # barra de búsqueda que filtra las listas por nombre.
-    header = ft.Container(
-        padding=ft.Padding.only(top=16, bottom=6),
-        alignment=ft.Alignment.CENTER,
-        content=ft.Image(src=theme.logo(), height=52, fit=ft.BoxFit.CONTAIN),
-    )
-
     lv = ft.ListView(expand=True, controls=[])
 
     def render(query: str = "") -> None:
@@ -166,15 +162,22 @@ def build_setlists(setlists: list[dict], on_open: Callable[[int], None],
                 color=theme.THEME["text_muted"]))]
         _safe_update(lv)
 
-    render()
-    search = search_pill("Buscar lista…", lambda e: render(e.control.value or ""))
+    render(query)                        # filtro inicial (del buscador fijo, si lo hay)
 
     # Las confirmaciones se muestran como toast flotante (ver ``show_toast``), no
     # inline; ``status`` se mantiene por compatibilidad de firma.
-    children: list[ft.Control] = [header, search, lv]
+    children: list[ft.Control] = []
+    if not embedded:                     # embebida: el logo lo fija el shell
+        children.append(logo_header())
+    if not external_search:              # embebida: el buscador fijo lo pone el shell
+        children.append(search_pill("Buscar lista…",
+                                    lambda e: render(e.control.value or "")))
+    children.append(lv)
     if on_tab is not None:
         children.append(build_bottom_bar("setlists", on_tab))
     column = ft.Column(children, expand=True, spacing=0)
+    if embedded:                         # embebida: el ＋ es fijo y lo pone el shell
+        return column
 
     # FAB «＋» dorado, igual al de «nueva canción» del inicio; crea una lista nueva.
     fab = ft.Container(

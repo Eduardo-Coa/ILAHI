@@ -7,11 +7,23 @@ una página falsa (sin ventana) y se inspecciona su estructura, igual que
 
 from __future__ import annotations
 
+import asyncio
+
 import flet as ft
 
 from models.song import Song
 from views.stage_view import PresentScreen, StageScreen, _USER_GRACE
 import theme
+
+
+class _RecordingBody:
+    """ListView de mentira que anota los ``scroll_to`` (offset, ms, curva)."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+
+    async def scroll_to(self, offset=None, duration=0, curve=None, **_kw):
+        self.calls.append((offset, duration, curve))
 
 
 class _FakePage:
@@ -180,6 +192,28 @@ def test_mover_la_pantalla_a_mano_manda_sobre_el_autoscroll():
     assert screen._user_moving() is False       # el turno se cierra al detenerse
 
 
+def test_arrastrar_con_el_autoscroll_activo_relanza_al_soltar():
+    """Regresión: con ▶ activo, arrastrar la pantalla (p. ej. al inicio) cancela la
+    animación nativa; al soltar, el autoscroll debe RETOMAR solo, sin tener que mover el
+    slider de velocidad. El relanzado se marca en el propio evento de scroll, así que no
+    depende de que el supervisor observe el gesto a mitad de camino (un arrastre corto
+    puede caber entre dos chequeos)."""
+    screen = PresentScreen(_FakePage(), Song(id=15, title="D", sections=[]),
+                           0, on_exit=lambda: None)
+    screen._playing = True
+    screen._needs_restart = False
+    screen._pixels = 800.0
+
+    screen._on_scroll(_scroll_event(ft.ScrollType.USER, 800.0,
+                                    ft.ScrollDirection.REVERSE))    # agarra y arrastra
+    screen._on_scroll(_scroll_event(ft.ScrollType.UPDATE, 0.0))    # hasta el inicio
+    screen._on_scroll(_scroll_event(ft.ScrollType.END, 0.0))       # suelta
+
+    assert screen._needs_restart is True        # el supervisor relanzará el glide
+    assert screen._user_moving() is False       # ya soltó: nada le cede el mando
+    assert screen._pixels == 0.0                # y retoma desde donde dejó la letra
+
+
 def test_el_turno_del_usuario_caduca_solo_sin_evento_final():
     """Regresión: el autoscroll no puede quedarse colgado si se pierde el ``END``.
 
@@ -204,8 +238,10 @@ def test_el_turno_del_usuario_caduca_solo_sin_evento_final():
     assert screen._pixels == 0.0                # y lo hace desde donde el usuario la dejó
 
 
-def test_la_animacion_del_autoscroll_no_frena_su_propio_avance():
-    """Las posiciones a mitad de la animación no deben pisar la posición objetivo."""
+def test_durante_la_animacion_se_sigue_la_posicion_real():
+    """El deslizamiento es una sola animación nativa hacia un destino FIJO (el final),
+    así que sus posiciones intermedias ya no frenan el avance y SÍ se siguen: hacen
+    falta para pausar o cambiar la velocidad y continuar desde donde va la letra."""
     screen = PresentScreen(_FakePage(), Song(id=9, title="R", sections=[]),
                            0, on_exit=lambda: None)
     screen._playing = True
@@ -213,7 +249,66 @@ def test_la_animacion_del_autoscroll_no_frena_su_propio_avance():
 
     screen._on_scroll(_scroll_event(ft.ScrollType.UPDATE, 503.0))
 
-    assert screen._pixels == 500.0
+    assert screen._pixels == 503.0
+
+
+def test_el_glide_va_al_final_en_una_sola_animacion_lineal():
+    """El corazón del arreglo: una única animación nativa hasta el final, con duración
+    = distancia restante / velocidad y curva LINEAL (sin easing = sin pulso)."""
+    screen = PresentScreen(_FakePage(), Song(id=11, title="G", sections=[]),
+                           0, on_exit=lambda: None)
+    screen._body = _RecordingBody()
+    screen._playing = True
+    screen._max_extent = 1000.0
+    screen._pixels = 100.0
+    screen._speed = 90.0                       # 900 px restantes ÷ 90 px/s = 10 s
+
+    asyncio.run(screen._launch_glide())
+
+    offset, ms, curve = screen._body.calls[-1]
+    assert offset == 1000.0                    # una sola animación hasta el final
+    assert ms == 10000                         # 10 s, del ritmo del slider
+    assert curve == ft.AnimationCurve.LINEAR   # pareja de punta a punta
+
+
+def test_pausar_corta_la_animacion_donde_va_la_letra():
+    """Pausar reemplaza la animación nativa en curso por un salto de duración 0 a la
+    posición actual: la letra se queda donde va, no donde arrancó el deslizamiento."""
+    screen = PresentScreen(_FakePage(), Song(id=12, title="P", sections=[]),
+                           0, on_exit=lambda: None)
+    screen._body = _RecordingBody()
+    screen._pixels = 640.0
+
+    asyncio.run(screen._freeze())
+
+    offset, ms, _curve = screen._body.calls[-1]
+    assert offset == 640.0 and ms == 0
+
+
+def test_cambiar_la_velocidad_mientras_toca_marca_relanzar():
+    """Con el autoscroll activo, mover el slider relanza la animación (nueva duración)."""
+    screen = PresentScreen(_FakePage(), Song(id=13, title="V", sections=[]),
+                           0, on_exit=lambda: None)
+    screen._playing = True
+    screen._needs_restart = False
+
+    screen._on_speed(type("E", (), {"control": type("C", (), {"value": 40.0})()})())
+
+    assert screen._speed == 40.0
+    assert screen._needs_restart is True
+
+
+def test_cambiar_la_velocidad_en_pausa_no_relanza_nada():
+    """Sin reproducir no hay animación que relanzar: solo se guarda la velocidad."""
+    screen = PresentScreen(_FakePage(), Song(id=14, title="W", sections=[]),
+                           0, on_exit=lambda: None)
+    screen._playing = False
+    screen._needs_restart = False
+
+    screen._on_speed(type("E", (), {"control": type("C", (), {"value": 40.0})()})())
+
+    assert screen._speed == 40.0
+    assert screen._needs_restart is False
 
 
 def test_el_toggle_arranca_y_detiene_el_bucle_del_compas():
@@ -236,6 +331,29 @@ def test_el_toggle_arranca_y_detiene_el_bucle_del_compas():
     screen._toggle_metro()
     assert screen._metro_on is False
     assert llamadas[-1] == ("stop",)
+
+
+def test_stop_apaga_el_metronomo_al_abandonar_la_pantalla():
+    """Regresión: salir apaga el metrónomo, aunque no sea por la ✕.
+
+    El «atrás» del sistema navega saltándose el ``_exit`` de la vista; por eso la
+    parada vive en ``stop()``, que ``main`` llama al abandonar cualquier pantalla.
+    Antes el metrónomo seguía sonando en la pantalla anterior.
+    """
+    song = Song(id=1, title="X", bpm=90, rhythm="4/4", sections=[])
+    screen = PresentScreen(_FakePage(), song, 0, on_exit=lambda: None)
+    screen.build()
+    llamadas: list = []
+    screen._metro_sound.start = lambda bpm, beats: llamadas.append("start")
+    screen._metro_sound.stop = lambda: llamadas.append("stop")
+
+    screen._toggle_metro()                         # queda sonando
+    assert screen._metro_on is True
+
+    screen.stop()                                  # al abandonar la pantalla
+    assert screen._metro_on is False               # el metrónomo se apagó
+    assert llamadas[-1] == "stop"
+    assert screen._playing is False                # y el autoscroll también
 
 
 def test_cambiar_el_tempo_rearma_el_compas_solo_si_esta_sonando():

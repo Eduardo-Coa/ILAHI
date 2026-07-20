@@ -321,6 +321,7 @@ class EditSongScreen:
                     blocks.append(ft.Row(
                         [self._intro_cell(s, section) for s in line.syllables],
                         wrap=True, spacing=0, run_spacing=2,
+                        alignment=ft.MainAxisAlignment.CENTER,      # centrada, como el escenario
                         vertical_alignment=ft.CrossAxisAlignment.START))
                     continue
                 if not any(s.text.strip() or s.chord for s in line.syllables):
@@ -335,6 +336,7 @@ class EditSongScreen:
                         for word in _group_words(part)
                     ]
                     blocks.append(ft.Row(word_rows, wrap=True, spacing=0, run_spacing=2,
+                                         alignment=ft.MainAxisAlignment.CENTER,   # letra centrada
                                          vertical_alignment=ft.CrossAxisAlignment.START))
         self._grid.controls = blocks
         _safe_update(self._grid)
@@ -357,29 +359,37 @@ class EditSongScreen:
         )
 
     def _section_header(self, section: Section, index: int) -> ft.Control:
-        """Etiqueta de la sección + su tono + control de modulación (desde la 2ª)."""
+        """Etiqueta de la sección (centrada) + su tono; y —desde la 2ª sección— el
+        control de modulación centrado en una línea aparte, debajo del título."""
         label = section.label or SECTION_LABELS.get(section.type, section.type)
-        controls: list[ft.Control] = [
+        titulo: list[ft.Control] = [
             ft.Text(label.upper(), size=theme.SIZE_SECTION,
                     color=theme.THEME["section_label"]),
         ]
         key = self._effective_key(section)
         if key:
-            controls.append(ft.Text(f"· Tono {key}", size=theme.SIZE_SECTION,
-                                    color=theme.THEME["chord"]))
+            titulo.append(ft.Text(f"· Tono {key}", size=theme.SIZE_SECTION,
+                                  color=theme.THEME["chord"]))
+        filas: list[ft.Control] = [
+            ft.Row(titulo, spacing=4, wrap=True,
+                   alignment=ft.MainAxisAlignment.CENTER,
+                   vertical_alignment=ft.CrossAxisAlignment.CENTER),
+        ]
         if index > 0:            # la 1ª sección define el tono base de la canción
             t = f"{section.transpose:+d}".replace("+0", "0")
-            controls.extend([
-                ft.Container(width=8),
-                ft.Text("Modulación:", size=11, color=theme.THEME["text_muted"]),
-                ft.TextButton("−", on_click=lambda _e, s=section: self._section_transpose(s, -1)),
-                ft.Text(t, size=12, color=theme.THEME["accent"]),
-                ft.TextButton("+", on_click=lambda _e, s=section: self._section_transpose(s, 1)),
-            ])
+            filas.append(ft.Row(
+                [
+                    ft.Text("Modulación:", size=11, color=theme.THEME["text_muted"]),
+                    ft.TextButton("−", on_click=lambda _e, s=section: self._section_transpose(s, -1)),
+                    ft.Text(t, size=12, color=theme.THEME["accent"]),
+                    ft.TextButton("+", on_click=lambda _e, s=section: self._section_transpose(s, 1)),
+                ],
+                spacing=4, alignment=ft.MainAxisAlignment.CENTER,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER))
         return ft.Container(
             padding=ft.Padding.only(top=8, bottom=1),
-            content=ft.Row(controls, wrap=True, spacing=4,
-                           vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            content=ft.Column(filas, spacing=2,
+                              horizontal_alignment=ft.CrossAxisAlignment.CENTER),
         )
 
     def _cell(self, syl: Syllable, section: Section) -> ft.Control:

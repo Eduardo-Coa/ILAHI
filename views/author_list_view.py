@@ -16,7 +16,7 @@ import flet as ft
 import theme
 from database.db import author_display
 from views.bottom_bar import build_bottom_bar
-from views.widgets import show_toast, segmented_toggle
+from views.widgets import show_toast, segmented_toggle, logo_header
 from views.search_field import search_pill
 
 
@@ -27,33 +27,40 @@ class AuthorsScreen:
                  on_open_author: Callable[[str], None],
                  on_back: Callable[[], None],
                  on_export_author: Callable,
-                 on_tab: Callable[[str], None] | None = None) -> None:
+                 on_tab: Callable[[str], None] | None = None,
+                 embedded: bool = False, external_search: bool = False,
+                 query: str = "") -> None:
         self.page = page
         self.db = db
         self.on_open_author = on_open_author      # ver las canciones de ese autor
         self.on_back = on_back
         self.on_export_author = on_export_author  # async: exporta su cancionero
         self.on_tab = on_tab
+        # Embebida en el shell: el logo y el toggle Autores|Canciones los fija el
+        # shell; aquí solo va el cuerpo deslizante (lista de autores). Con
+        # ``external_search`` el buscador también es del shell y el filtro llega en
+        # ``query``.
+        self.embedded = embedded
+        self.external_search = external_search
         self._confirm_delete: str | None = None
-        self._query = ""
+        self._query = query
         self._list = ft.ListView(expand=True, controls=[])
 
     # ------------------------------------------------------------------
     def build(self) -> ft.Control:
         self._refill(update=False)
-        # Mismo header que el inicio: solo el logo (la pestaña «Autores» del toggle
-        # ya indica dónde estamos, así que no se repite el título).
-        header = ft.Container(
-            padding=ft.Padding.only(top=16, bottom=6),
-            alignment=ft.Alignment.CENTER,
-            content=ft.Image(src=theme.logo(), height=52, fit=ft.BoxFit.CONTAIN),
-        )
-        # Toggle Autores | Canciones (Autores activa aquí); a «Canciones» vuelve a la
-        # biblioteca. Reemplaza al chip y al embudo de filtros.
-        search = search_pill("Buscar autor…", self._on_query)
-        toggle = segmented_toggle("Autores", "Canciones", active="left",
-                                  on_left=lambda: None, on_right=lambda: self.on_back())
-        children: list[ft.Control] = [header, search, toggle, self._list]
+        children: list[ft.Control] = []
+        if not self.embedded:
+            children.append(logo_header())
+        if not self.external_search:            # el buscador fijo lo pone el shell
+            children.append(search_pill("Buscar autor…", self._on_query))
+        if not self.embedded:
+            # Toggle Autores | Canciones (Autores activa aquí); a «Canciones» vuelve a
+            # la biblioteca. Embebida, este toggle lo fija el shell.
+            children.append(segmented_toggle(
+                "Autores", "Canciones", active="left",
+                on_left=lambda: None, on_right=lambda: self.on_back()))
+        children.append(self._list)
         if self.on_tab is not None:
             children.append(build_bottom_bar("library", self.on_tab))
         return ft.Column(children, expand=True, spacing=0)
