@@ -104,10 +104,27 @@ CHORD_RE = re.compile(
 # acordes de una secuencia («G - Bm - A»); no es un acorde ni letra.
 _SEPARATOR_RE = re.compile(r"^[-–—]+$")
 
+# Acorde ENVUELTO en paréntesis: «(G)», convención habitual para un acorde opcional
+# o de paso. Ojo: no confundir con los paréntesis INTERNOS de «C(add9)», que CHORD_RE
+# ya acepta y este patrón no toca (no empiezan con «(»).
+_PAREN_CHORD_RE = re.compile(r"^\((.+)\)$")
+
+
+def bare_chord(tok: str) -> str:
+    """Quita los paréntesis que envuelven a un acorde opcional: «(G)» → «G».
+
+    Se guarda SIN paréntesis a propósito: ``transpose_chord("(G)")`` devuelve el
+    acorde igual, así que con ellos se quedaría sin transponer mientras el resto de
+    la canción sí cambia de tono.
+    """
+    m = _PAREN_CHORD_RE.match(tok)
+    return m.group(1) if m else tok
+
 
 def is_chord_token(tok: str) -> bool:
-    """True si el token aislado parece un acorde (notación americana)."""
-    return bool(CHORD_RE.match(tok))
+    """True si el token aislado parece un acorde (notación americana), aceptándolo
+    también entre paréntesis («(G)»)."""
+    return bool(CHORD_RE.match(bare_chord(tok)))
 
 
 def _is_separator_token(tok: str) -> bool:
@@ -158,6 +175,23 @@ def _strip_accents(text: str) -> str:
 def is_section_header(line: str) -> bool:
     """Devuelve True si la línea es un encabezado de sección tipo [Coro]."""
     return bool(SECTION_RE.match(line.strip()))
+
+
+def _repair_unmatched_brackets(line: str) -> str:
+    """Completa un corchete sin pareja: «Intro]» o «[Intro» → «[Intro]».
+
+    Perder un corchete al copiar de una web es un accidente muy común, y sin pareja el
+    encabezado no se reconocía: la línea entraba como LETRA, lo que abría una estrofa
+    sin etiqueta Y desviaba el bloque de acordes siguiente a un «Interludio».
+
+    Solo actúa cuando hay EXACTAMENTE uno de los dos corchetes; con ambos (o con
+    ninguno) la línea ya se interpreta bien y se devuelve intacta.
+    """
+    abre, cierra = line.startswith("["), line.endswith("]")
+    if abre == cierra:
+        return line
+    nucleo = (line[1:] if abre else line[:-1]).strip()
+    return f"[{nucleo}]" if nucleo else line
 
 
 # Secciones de «casillas» (solo acordes, sin letra): introducción e interludio.
@@ -226,6 +260,9 @@ def detect_header(line: str) -> tuple[str, str] | None:
     stripped = line.strip()
     if not stripped:
         return None
+    # Un corchete sin pareja se completa antes de nada: casi siempre es un encabezado
+    # copiado a medias, no letra (ver _repair_unmatched_brackets).
+    stripped = _repair_unmatched_brackets(stripped)
 
     # Explícito: [texto]
     if is_section_header(stripped):
@@ -414,7 +451,17 @@ def _attach_chords(chord_raw: str, lyric_raw: str, position: int) -> Line:
     if not line.syllables:
         return _filled_chord_line([t for _, t in chords], position)
 
+    # Un acorde que empieza más allá del último carácter del verso NO tiene letra
+    # debajo: es un acorde suelto (final de frase). Se le da su propia casilla AL
+    # FINAL del renglón, en orden. Antes caían sobre la última sílaba *asignable*, lo
+    # que los pegaba a la última palabra o —si chocaban— metía la casilla ANTES del
+    # signo de puntuación, partiendo «true?» en «true» + casilla + «?».
+    fin_letra = len(lyric_raw.rstrip())
+    sueltos = [t for c, t in chords if c >= fin_letra]
+
     for col, token in chords:
+        if col >= fin_letra:
+            continue                     # se agrega al final, después del bucle
         idx = _target_index(cols, line.syllables, col)
         if idx is None:
             continue
@@ -423,9 +470,14 @@ def _attach_chords(chord_raw: str, lyric_raw: str, position: int) -> Line:
             slot = Syllable(id=None, position=0, text="")
             line.syllables.insert(idx + 1, slot)
             cols.insert(idx + 1, col)
-            slot.chord = Chord(id=None, value=token)
+            slot.chord = Chord(id=None, value=bare_chord(token))
         else:
-            line.syllables[idx].chord = Chord(id=None, value=token)
+            line.syllables[idx].chord = Chord(id=None, value=bare_chord(token))
+
+    for token in sueltos:
+        slot = Syllable(id=None, position=0, text="")
+        slot.chord = Chord(id=None, value=bare_chord(token))
+        line.syllables.append(slot)
 
     for pos, syl in enumerate(line.syllables):
         syl.position = pos
@@ -445,7 +497,7 @@ def _filled_chord_line(tokens: list[str], position: int,
     for i in range(n):
         syl = Syllable(id=None, position=i, text="")
         if i < len(tokens):
-            syl.chord = Chord(id=None, value=tokens[i])
+            syl.chord = Chord(id=None, value=bare_chord(tokens[i]))
         line.syllables.append(syl)
     return line
 
@@ -471,6 +523,13 @@ def parse_lyrics(text: str, title: str = "Sin título",
     se equivoca o se pegan solo versos.
     """
     raw_lines = text.split("\n")
+    # Las líneas en blanco de ARRIBA se descartan: como todavía no hay sección abierta,
+    # la primera hacía que el parser creara una «Estrofa» sin etiqueta para colgarla y,
+    # aunque después la línea se descartaba, la sección fantasma quedaba. Cuenta también
+    # la línea de solo espacios (muy fácil de arrastrar al copiar de una web). En el
+    # MEDIO del texto no se tocan: ahí separan estrofas.
+    while raw_lines and not raw_lines[0].strip():
+        raw_lines.pop(0)
     has_chords = detect_chords and any(
         detect_header(rl) is None and is_chord_line_text(rl)
         for rl in raw_lines

@@ -14,17 +14,11 @@ import flet as ft
 from models.setlist import SetlistItem
 from models.transposer import transpose_chord, transpose_song
 from views.bottom_bar import build_bottom_bar
-from views.widgets import centered_header, back_button, square_button, show_toast, logo_header
+from views.widgets import (centered_header, back_button, square_button, show_toast,
+                           logo_header, _safe_update, key_badge, accent_fab,
+                           confirm_dialog, list_row_card, FAB_CLEARANCE)
 from views.search_field import search_pill
 import theme
-
-
-def _safe_update(control: ft.Control) -> None:
-    """Actualiza el control solo si está montado (headless-safe)."""
-    try:
-        control.update()
-    except Exception:
-        pass
 
 
 # ---------------------------------------------------------------------------
@@ -59,15 +53,7 @@ def _setlist_tile(setlist: dict, on_open: Callable[[int], None],
     ]
     if menu is not None:            # ⋮ con opciones (editar nombre / eliminar)
         controls.append(menu)
-    return ft.Container(
-        key=f"setlist-{setlist['id']}",
-        bgcolor=theme.THEME["surface"], border_radius=14,
-        padding=ft.Padding.symmetric(horizontal=4, vertical=6),
-        margin=ft.Margin.symmetric(horizontal=12, vertical=5),
-        content=ft.Row(
-            vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=2,
-            controls=controls),
-    )
+    return list_row_card(controls, key=f"setlist-{setlist['id']}")
 
 
 def _setlist_menu(setlist: dict, page, db, refresh) -> ft.Control | None:
@@ -93,11 +79,8 @@ def _setlist_menu(setlist: dict, page, db, refresh) -> ft.Control | None:
             refresh(f"✓ Lista renombrada a «{nuevo}»")
 
         field.on_submit = save
-        page.show_dialog(ft.AlertDialog(
-            modal=True, shape=ft.RoundedRectangleBorder(radius=18),
-            bgcolor=theme.THEME["surface2"],
-            title=ft.Text("Editar nombre", color=theme.THEME["text"]),
-            content=field,
+        page.show_dialog(confirm_dialog(
+            "Editar nombre", field,
             actions=[
                 ft.TextButton("Cancelar", on_click=lambda _e: page.pop_dialog()),
                 ft.TextButton("Guardar", on_click=save),
@@ -109,12 +92,10 @@ def _setlist_menu(setlist: dict, page, db, refresh) -> ft.Control | None:
             db.delete_setlist(sid)
             refresh(f"✓ Lista «{name}» eliminada")
 
-        page.show_dialog(ft.AlertDialog(
-            modal=True, shape=ft.RoundedRectangleBorder(radius=18),
-            bgcolor=theme.THEME["surface2"],
-            title=ft.Text("Eliminar lista", color=theme.THEME["text"]),
-            content=ft.Text(f"¿Eliminar la lista «{name}»? Las canciones no se borran.",
-                            color=theme.THEME["text_muted"]),
+        page.show_dialog(confirm_dialog(
+            "Eliminar lista",
+            ft.Text(f"¿Eliminar la lista «{name}»? Las canciones no se borran.",
+                    color=theme.THEME["text_muted"]),
             actions=[
                 ft.TextButton("Cancelar", on_click=lambda _e: page.pop_dialog()),
                 ft.TextButton("Eliminar", on_click=do_delete),
@@ -145,7 +126,9 @@ def build_setlists(setlists: list[dict], on_open: Callable[[int], None],
     omiten). ``external_search``: el buscador también es del shell; el filtro llega
     en ``query`` y aquí no se dibuja la píldora.
     """
-    lv = ft.ListView(expand=True, controls=[])
+    # Aire abajo para que el ＋ flotante no tape la última lista.
+    lv = ft.ListView(expand=True, controls=[],
+                     padding=ft.Padding.only(bottom=FAB_CLEARANCE))
 
     def render(query: str = "") -> None:
         needle = (query or "").strip().lower()
@@ -182,11 +165,7 @@ def build_setlists(setlists: list[dict], on_open: Callable[[int], None],
     # FAB «＋» dorado, igual al de «nueva canción» del inicio; crea una lista nueva.
     fab = ft.Container(
         right=18, bottom=90 if on_tab is not None else 24,
-        content=ft.FloatingActionButton(
-            icon=ft.Icons.ADD, tooltip="Nueva lista",
-            bgcolor=theme.THEME["accent"], foreground_color=theme.THEME["bg"],
-            shape=ft.RoundedRectangleBorder(radius=18),
-            on_click=lambda _e: on_new()),
+        content=accent_fab(ft.Icons.ADD, "Nueva lista", lambda _e: on_new()),
     )
     return ft.Stack(expand=True, controls=[column, fab])
 
@@ -263,7 +242,7 @@ class SetlistDetailScreen:
         return ft.ReorderableListView(
             expand=True, on_reorder=self._on_reorder,
             show_default_drag_handles=True, spacing=0,
-            padding=ft.Padding.only(top=4, bottom=96),
+            padding=ft.Padding.only(top=4, bottom=FAB_CLEARANCE),
             controls=[self._song_tile(i, it) for i, it in enumerate(items)])
 
     def _song_tile(self, i: int, item: SetlistItem) -> ft.Control:
@@ -281,44 +260,19 @@ class SetlistDetailScreen:
                 ft.Text(item.rhythm or "—", size=11, color=theme.THEME["text_muted"]),
             ], spacing=4, tight=True),
         ], spacing=1, tight=True)
-        return ft.Container(
-            key=str(id(item)),                    # clave estable para reordenar
-            bgcolor=theme.THEME["surface"], border_radius=14,
-            padding=ft.Padding.symmetric(horizontal=4, vertical=6),
-            margin=ft.Margin.symmetric(horizontal=12, vertical=5),
-            content=ft.Row(
-                vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=2,
-                controls=[
-                    # ♪ (sin favorito) — solo indica que es una canción
-                    ft.Container(width=40, alignment=ft.Alignment.CENTER,
-                                 content=ft.Icon(ft.Icons.MUSIC_NOTE, size=22,
-                                                 color=theme.THEME["text_muted"])),
-                    ft.Container(
-                        expand=True, ink=True, border_radius=10,
-                        on_click=lambda _e, k=i: self.on_play_item(self.setlist, k),
-                        padding=ft.Padding.symmetric(horizontal=4, vertical=4),
-                        content=info),
-                    self._key_badge(key),
-                    self._song_menu(i),
-                ],
-            ),
-        )
-
-    def _key_badge(self, key: str | None) -> ft.Control:
-        """Badge redondeado con el tono, idéntico al de la biblioteca."""
-        return ft.Container(
-            width=52, height=52,
-            border=ft.Border.all(1, theme.THEME["chord"]),
-            border_radius=12, bgcolor=theme.THEME["chord_bg"],
-            alignment=ft.Alignment.CENTER,
-            content=ft.Column([
-                ft.Text(key or "—", size=17, weight=ft.FontWeight.BOLD,
-                        color=theme.THEME["chord"]),
-                ft.Text("Tono", size=8, color=theme.THEME["text_muted"]),
-            ], spacing=0, tight=True,
-                alignment=ft.MainAxisAlignment.CENTER,
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER),
-        )
+        return list_row_card([
+            # ♪ (sin favorito) — solo indica que es una canción
+            ft.Container(width=40, alignment=ft.Alignment.CENTER,
+                         content=ft.Icon(ft.Icons.MUSIC_NOTE, size=22,
+                                         color=theme.THEME["text_muted"])),
+            ft.Container(
+                expand=True, ink=True, border_radius=10,
+                on_click=lambda _e, k=i: self.on_play_item(self.setlist, k),
+                padding=ft.Padding.symmetric(horizontal=4, vertical=4),
+                content=info),
+            key_badge(key),
+            self._song_menu(i),
+        ], key=str(id(item)))                     # clave estable para reordenar
 
     def _song_menu(self, i: int) -> ft.Control:
         """⋮ de cada fila: reemplazar el original (si el tono difiere) · quitar."""
@@ -349,11 +303,9 @@ class SetlistDetailScreen:
             self._rebuild()
             show_toast(self.page, f"✓ Original de «{item.title}» actualizado al tono de la lista")
 
-        self.page.show_dialog(ft.AlertDialog(
-            modal=True, shape=ft.RoundedRectangleBorder(radius=18),
-            bgcolor=theme.THEME["surface2"],
-            title=ft.Text("Reemplazar original", color=theme.THEME["text"]),
-            content=ft.Text(
+        self.page.show_dialog(confirm_dialog(
+            "Reemplazar original",
+            ft.Text(
                 f"El tono de «{item.title}» en esta lista pasará a ser el de la canción "
                 "original (cambia la canción en toda la app). ¿Continuar?",
                 color=theme.THEME["text_muted"]),
@@ -370,11 +322,8 @@ class SetlistDetailScreen:
         reproducir = self.on_present or self.on_play_item
         return ft.Container(
             right=18, bottom=24,
-            content=ft.FloatingActionButton(
-                icon=ft.Icons.PLAY_ARROW, tooltip="Reproducir la lista (escenario)",
-                bgcolor=theme.THEME["accent"], foreground_color=theme.THEME["bg"],
-                shape=ft.RoundedRectangleBorder(radius=18),
-                on_click=lambda _e: reproducir(self.setlist, 0)),
+            content=accent_fab(ft.Icons.PLAY_ARROW, "Reproducir la lista (escenario)",
+                               lambda _e: reproducir(self.setlist, 0)),
         )
 
     # -- acciones --
@@ -477,23 +426,15 @@ class SongPickerScreen:
             ft.Text(song.get("author") or "Desconocido", size=12,
                     color=theme.THEME["text_muted"], no_wrap=True),
         ], spacing=1, tight=True)
-        return ft.Container(
-            bgcolor=theme.THEME["surface"], border_radius=14,
-            padding=ft.Padding.symmetric(horizontal=4, vertical=6),
-            margin=ft.Margin.symmetric(horizontal=12, vertical=5),
-            content=ft.Row(
-                vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=2,
-                controls=[
-                    ft.Container(width=40, alignment=ft.Alignment.CENTER,
-                                 content=ft.Icon(ft.Icons.MUSIC_NOTE, size=22,
-                                                 color=theme.THEME["text_muted"])),
-                    ft.Container(expand=True,
-                                 padding=ft.Padding.symmetric(horizontal=4, vertical=4),
-                                 content=info),
-                    self._add_badge(song),
-                ],
-            ),
-        )
+        return list_row_card([
+            ft.Container(width=40, alignment=ft.Alignment.CENTER,
+                         content=ft.Icon(ft.Icons.MUSIC_NOTE, size=22,
+                                         color=theme.THEME["text_muted"])),
+            ft.Container(expand=True,
+                         padding=ft.Padding.symmetric(horizontal=4, vertical=4),
+                         content=info),
+            self._add_badge(song),
+        ])
 
     def _add_badge(self, song: dict) -> ft.Control:
         """Botón ＋ con el mismo diseño del badge de tono (reemplaza «＋ Agregar»)."""

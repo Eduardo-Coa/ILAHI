@@ -56,7 +56,15 @@ def test_tres_silabas_cada_acorde_sobre_su_silaba():
     assert lyric[chord.index("F#")] == "n"
 
 
-def test_slot_de_acorde_sin_letra_muestra_guion():
+def test_slot_de_acorde_sin_letra_muestra_guion_con_aire():
+    """La casilla de un acorde suelto es AIRE + guion, en ese orden.
+
+    El espacio va delante para que el hueco quede parejo: con el aire detrás, la
+    primera casilla se pegaba a la letra («me-») y solo las siguientes se separaban.
+    Es espacio DURO porque uno normal al borde de un ``Text`` lo recorta el layout.
+    El acorde se corre el mismo espacio, así sigue empezando sobre su guion.
+    """
     chord, lyric = _word_chord_lyric(_word(("", "A")))
-    assert lyric == "-"
-    assert chord == "A"
+    assert lyric == "\u00a0-"
+    assert chord == " A"
+    assert lyric[chord.index("A")] == "-"     # acorde y guion, misma columna

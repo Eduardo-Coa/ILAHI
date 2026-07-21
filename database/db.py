@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 import tempfile
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -59,6 +60,27 @@ class Database:
         if self._conn is not None:
             self._conn.close()
             self._conn = None
+
+    @contextmanager
+    def _tx(self, log_msg: str = "", *log_args):
+        """Transacción: entrega el cursor, hace ``commit`` al salir bien y ``rollback``
+        + re-lanza si algo falla. Reemplaza el mismo try/commit/except/rollback que se
+        repetía en cada escritura.
+
+        ``log_msg`` se registra ANTES del rollback (como hacía cada método). OJO: sus
+        argumentos se evalúan al ENTRAR al bloque, así que no sirve para valores que
+        cambian dentro —``save_song`` asigna ``song.id`` adentro y por eso registra su
+        error por su cuenta—.
+        """
+        conn = self._connect()
+        try:
+            yield conn.cursor()
+            conn.commit()
+        except Exception:
+            if log_msg:
+                _log.exception(log_msg, *log_args)
+            conn.rollback()
+            raise
 
     # ------------------------------------------------------------------
     # Copias de seguridad
@@ -268,39 +290,21 @@ class Database:
                 at      TEXT DEFAULT (datetime('now'))
             )
         """)
-        self._migrate_section_transpose(cur)
-        self._migrate_song_favorite(cur)
-        self._migrate_song_original_key(cur)
-        self._migrate_song_bpm(cur)
+        # Migraciones idempotentes: agregan columnas que una BD vieja no tenga.
+        self._ensure_column(cur, "sections", "transpose", "INTEGER DEFAULT 0")
+        self._ensure_column(cur, "songs", "favorite", "INTEGER DEFAULT 0")
+        self._ensure_column(cur, "songs", "original_key", "TEXT")
+        self._ensure_column(cur, "songs", "bpm", "INTEGER")
         conn.commit()
 
-    def _migrate_section_transpose(self, cur: sqlite3.Cursor) -> None:
-        """Añade la columna ``transpose`` a ``sections`` si una BD antigua no la tiene."""
-        cur.execute("PRAGMA table_info(sections)")
+    def _ensure_column(self, cur: sqlite3.Cursor, table: str, column: str,
+                       coldef: str) -> None:
+        """Añade ``column`` a ``table`` si una BD antigua no la tiene (migración
+        idempotente). Solo corre al iniciar el esquema y es puramente aditivo."""
+        cur.execute(f"PRAGMA table_info({table})")
         columns = [row[1] for row in cur.fetchall()]  # row[1] = nombre de columna
-        if "transpose" not in columns:
-            cur.execute("ALTER TABLE sections ADD COLUMN transpose INTEGER DEFAULT 0")
-
-    def _migrate_song_favorite(self, cur: sqlite3.Cursor) -> None:
-        """Añade la columna ``favorite`` a ``songs`` si una BD antigua no la tiene."""
-        cur.execute("PRAGMA table_info(songs)")
-        columns = [row[1] for row in cur.fetchall()]
-        if "favorite" not in columns:
-            cur.execute("ALTER TABLE songs ADD COLUMN favorite INTEGER DEFAULT 0")
-
-    def _migrate_song_original_key(self, cur: sqlite3.Cursor) -> None:
-        """Añade la columna ``original_key`` a ``songs`` si una BD antigua no la tiene."""
-        cur.execute("PRAGMA table_info(songs)")
-        columns = [row[1] for row in cur.fetchall()]
-        if "original_key" not in columns:
-            cur.execute("ALTER TABLE songs ADD COLUMN original_key TEXT")
-
-    def _migrate_song_bpm(self, cur: sqlite3.Cursor) -> None:
-        """Añade la columna ``bpm`` a ``songs`` si una BD antigua no la tiene."""
-        cur.execute("PRAGMA table_info(songs)")
-        columns = [row[1] for row in cur.fetchall()]
-        if "bpm" not in columns:
-            cur.execute("ALTER TABLE songs ADD COLUMN bpm INTEGER")
+        if column not in columns:
+            cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coldef}")
 
     # ------------------------------------------------------------------
     # CRUD canciones
@@ -315,32 +319,31 @@ class Database:
         if song.author is not None:
             song.author = song.author.strip() or None
 
-        conn = self._connect()
-        cur = conn.cursor()
+        # El log va acá y no en ``_tx``: ``song.id`` se asigna DENTRO del bloque (con el
+        # lastrowid), y así el mensaje sale con el id real y no con el de antes.
         try:
-            if song.id is None:
-                cur.execute(
-                    "INSERT INTO songs (title, author, `key`, original_key, rhythm, bpm, capo, notes) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (song.title, song.author, song.key, song.original_key,
-                     song.rhythm, song.bpm, song.capo, song.notes),
-                )
-                song.id = cur.lastrowid
-            else:
-                cur.execute(
-                    "UPDATE songs SET title=?, author=?, `key`=?, original_key=?, rhythm=?, bpm=?, "
-                    "capo=?, notes=?, updated_at=datetime('now') WHERE id=?",
-                    (song.title, song.author, song.key, song.original_key, song.rhythm, song.bpm,
-                     song.capo, song.notes, song.id),
-                )
-                # Borrar secciones antiguas; el CASCADE elimina líneas/sílabas/acordes
-                cur.execute("DELETE FROM sections WHERE song_id=?", (song.id,))
+            with self._tx() as cur:
+                if song.id is None:
+                    cur.execute(
+                        "INSERT INTO songs (title, author, `key`, original_key, rhythm, bpm, capo, notes) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        (song.title, song.author, song.key, song.original_key,
+                         song.rhythm, song.bpm, song.capo, song.notes),
+                    )
+                    song.id = cur.lastrowid
+                else:
+                    cur.execute(
+                        "UPDATE songs SET title=?, author=?, `key`=?, original_key=?, rhythm=?, bpm=?, "
+                        "capo=?, notes=?, updated_at=datetime('now') WHERE id=?",
+                        (song.title, song.author, song.key, song.original_key, song.rhythm, song.bpm,
+                         song.capo, song.notes, song.id),
+                    )
+                    # Borrar secciones antiguas; el CASCADE elimina líneas/sílabas/acordes
+                    cur.execute("DELETE FROM sections WHERE song_id=?", (song.id,))
 
-            self._save_sections(cur, song)
-            conn.commit()
+                self._save_sections(cur, song)
         except Exception:
             _log.exception("error al guardar canción %r (id=%s)", song.title, song.id)
-            conn.rollback()
             raise
         return song.id  # type: ignore[return-value]
 
@@ -508,27 +511,12 @@ class Database:
         sin que nadie la toque, y no se ha podido reproducir. El registro sirve
         para saber si la escritura vino de la app o no (ver ROADMAP).
         """
-        conn = self._connect()
-        cur = conn.cursor()
-        try:
+        with self._tx("error al marcar favorito id=%s", song_id) as cur:
             cur.execute("UPDATE songs SET favorite=? WHERE id=?",
                         (1 if favorite else 0, song_id))
             cur.execute(
                 "INSERT INTO fav_audit (song_id, value) VALUES (?, ?)",
                 (song_id, 1 if favorite else 0))
-            conn.commit()
-        except Exception:
-            _log.exception("error al marcar favorito id=%s", song_id)
-            conn.rollback()
-            raise
-
-    def favorite_audit(self, limit: int = 20) -> list[dict]:
-        """Últimas escrituras a ``songs.favorite``, de la más reciente a la más vieja."""
-        conn = self._connect()
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT song_id, value, at FROM fav_audit ORDER BY id DESC LIMIT ?", (limit,))
-        return [dict(row) for row in cur.fetchall()]
 
     def distinct_values(self, field: str) -> list[str]:
         """Valores distintos no vacíos de un campo filtrable (para los desplegables)."""
@@ -578,19 +566,12 @@ class Database:
 
     def set_author_favorite(self, name: str, favorite: bool) -> None:
         """Marca o desmarca un autor como favorito (sale primero en la lista)."""
-        conn = self._connect()
-        cur = conn.cursor()
-        try:
+        with self._tx("error al marcar autor favorito %r", name) as cur:
             if favorite:
                 cur.execute(
                     "INSERT OR IGNORE INTO author_favorites (name) VALUES (?)", (name,))
             else:
                 cur.execute("DELETE FROM author_favorites WHERE name=?", (name,))
-            conn.commit()
-        except Exception:
-            _log.exception("error al marcar autor favorito %r", name)
-            conn.rollback()
-            raise
 
     def delete_author(self, name: str) -> int:
         """Elimina un autor y **todas sus canciones**. Devuelve cuántas borró.
@@ -598,22 +579,15 @@ class Database:
         Hace backup antes: es la operación más destructiva de la app.
         """
         self.backup("delete_author")
-        conn = self._connect()
-        cur = conn.cursor()
-        try:
+        with self._tx("error al eliminar autor %r", name) as cur:
             if name == UNKNOWN_AUTHOR:
                 cur.execute("DELETE FROM songs WHERE author IS NULL OR author = ''")
             else:
                 cur.execute("DELETE FROM songs WHERE author=?", (name,))
             deleted = cur.rowcount
             cur.execute("DELETE FROM author_favorites WHERE name=?", (name,))
-            conn.commit()
-            _log.info("autor eliminado: %r (%d canciones)", name, deleted)
-            return deleted
-        except Exception:
-            _log.exception("error al eliminar autor %r", name)
-            conn.rollback()
-            raise
+        _log.info("autor eliminado: %r (%d canciones)", name, deleted)
+        return deleted
 
     def rename_author(self, old: str, new: str) -> None:
         """
@@ -623,9 +597,7 @@ class Database:
         """
         new_value = new.strip() or None
         self.backup("rename_author")
-        conn = self._connect()
-        cur = conn.cursor()
-        try:
+        with self._tx("error al renombrar autor %r", old) as cur:
             cur.execute("UPDATE songs SET author=? WHERE author=?", (new_value, old))
             # La marca sigue al autor; si se queda sin nombre, se descarta.
             cur.execute("SELECT 1 FROM author_favorites WHERE name=?", (old,))
@@ -634,26 +606,14 @@ class Database:
             if was_favorite and new_value:
                 cur.execute(
                     "INSERT OR IGNORE INTO author_favorites (name) VALUES (?)", (new_value,))
-            conn.commit()
-            _log.info("autor renombrado: %r -> %r", old, new_value)
-        except Exception:
-            _log.exception("error al renombrar autor %r", old)
-            conn.rollback()
-            raise
+        _log.info("autor renombrado: %r -> %r", old, new_value)
 
     def delete_song(self, song_id: int) -> None:
         """Elimina una canción y todos sus datos relacionados."""
         self.backup("delete_song")
-        conn = self._connect()
-        cur = conn.cursor()
-        try:
+        with self._tx("error al eliminar canción id=%s", song_id) as cur:
             cur.execute("DELETE FROM songs WHERE id=?", (song_id,))
-            conn.commit()
-            _log.info("canción eliminada: id=%s", song_id)
-        except Exception:
-            _log.exception("error al eliminar canción id=%s", song_id)
-            conn.rollback()
-            raise
+        _log.info("canción eliminada: id=%s", song_id)
 
     # ------------------------------------------------------------------
     # CRUD listas de canciones (setlists)
@@ -673,15 +633,9 @@ class Database:
 
     def create_setlist(self, name: str) -> int:
         """Crea una lista vacía y devuelve su id."""
-        conn = self._connect()
-        cur = conn.cursor()
-        try:
+        with self._tx() as cur:
             cur.execute("INSERT INTO setlists (name) VALUES (?)", (name,))
             new_id = cur.lastrowid
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
         return new_id  # type: ignore[return-value]
 
     def save_setlist(self, setlist: Setlist) -> int:
@@ -689,9 +643,7 @@ class Database:
         Inserta o actualiza una lista completa (nombre + canciones ordenadas con
         su tono). Reemplaza todos los items en una sola transacción. Devuelve el id.
         """
-        conn = self._connect()
-        cur = conn.cursor()
-        try:
+        with self._tx() as cur:
             if setlist.id is None:
                 cur.execute("INSERT INTO setlists (name) VALUES (?)", (setlist.name,))
                 setlist.id = cur.lastrowid
@@ -712,10 +664,6 @@ class Database:
                     (setlist.id, item.song_id, pos, item.transpose),
                 )
                 item.position = pos
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
         return setlist.id  # type: ignore[return-value]
 
     def load_setlist(self, setlist_id: int) -> Setlist:
@@ -755,13 +703,6 @@ class Database:
     def delete_setlist(self, setlist_id: int) -> None:
         """Elimina una lista y sus referencias a canciones (las canciones quedan)."""
         self.backup("delete_setlist")
-        conn = self._connect()
-        cur = conn.cursor()
-        try:
+        with self._tx("error al eliminar lista id=%s", setlist_id) as cur:
             cur.execute("DELETE FROM setlists WHERE id=?", (setlist_id,))
-            conn.commit()
-            _log.info("lista eliminada: id=%s", setlist_id)
-        except Exception:
-            _log.exception("error al eliminar lista id=%s", setlist_id)
-            conn.rollback()
-            raise
+        _log.info("lista eliminada: id=%s", setlist_id)

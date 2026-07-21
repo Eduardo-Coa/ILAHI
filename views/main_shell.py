@@ -38,7 +38,7 @@ import flet as ft
 
 import theme
 from views.bottom_bar import build_bottom_bar, fill_bar
-from views.widgets import logo_header, SlidingToggle
+from views.widgets import logo_header, SlidingToggle, _safe_update, accent_fab
 from views.search_field import search_pill
 
 # Secuencia plana. Cada índice sabe qué pestaña de la barra inferior resalta:
@@ -111,11 +111,8 @@ class MainShell:
         # y visibilidad dependen de la vista actual (fab_action).
         self._fab = ft.Container(
             right=18, bottom=90, visible=self.fab_action(self.index) is not None,
-            content=ft.FloatingActionButton(
-                icon=ft.Icons.ADD, tooltip="Añadir",
-                bgcolor=theme.THEME["accent"], foreground_color=theme.THEME["bg"],
-                shape=ft.RoundedRectangleBorder(radius=18),
-                on_click=lambda _e: self._fab_click()))
+            content=accent_fab(ft.Icons.ADD, "Añadir",
+                               lambda _e: self._fab_click()))
         bar = build_bottom_bar(TAB_OF[self.index], self._on_tab, row=self._bar_row)
         columna = ft.Column([
             logo_header(),
@@ -143,7 +140,7 @@ class MainShell:
         self._slots[i].content = self.build_page(i, self._query if i == self.index else "")
         self._built.add(i)
         self._dirty.discard(i)
-        self._safe_update(self._slots[i])
+        _safe_update(self._slots[i])
 
     def _ensure_around(self, i: int) -> None:
         """Arma la vista ``i`` y sus vecinas: al arrastrar, la de al lado asoma ENSEGUIDA,
@@ -167,9 +164,9 @@ class MainShell:
         self._sync_search(i)
         self._fab.visible = self.fab_action(i) is not None
         fill_bar(self._bar_row, TAB_OF[i], self._on_tab)
-        self._safe_update(self._toggle_holder)
-        self._safe_update(self._fab)
-        self._safe_update(self._bar_row)
+        _safe_update(self._toggle_holder)
+        _safe_update(self._fab)
+        _safe_update(self._bar_row)
 
     # -- buscador fijo -------------------------------------------------
     def _sync_search(self, i: int) -> None:
@@ -182,7 +179,7 @@ class MainShell:
             self._search_field.hint_text = hint
         self._query = ""
         self._search_field.value = ""
-        self._safe_update(self._search_holder)
+        _safe_update(self._search_holder)
 
     def _on_search_change(self, e) -> None:
         """Filtra el cuerpo actual con lo tipeado. El campo NO se reconstruye (vive en
@@ -196,7 +193,7 @@ class MainShell:
     def _rebuild_body(self) -> None:
         self._slots[self.index].content = self.build_page(self.index, self._query)
         self._built.add(self.index)
-        self._safe_update(self._slots[self.index])
+        _safe_update(self._slots[self.index])
 
     def refresh(self) -> None:
         """Re-sincroniza el buscador y reconstruye el cuerpo, sin cambiar de índice.
@@ -234,7 +231,7 @@ class MainShell:
         self._ensure_page(n)                 # que esté armada antes de mostrarla
         self._commit(n)                      # el chrome responde YA
         self._pv.selected_index = n
-        self._safe_update(self._pv)
+        _safe_update(self._pv)
 
     def _page_index(self, e) -> int:
         """Índice al que quedó el PageView, según el evento (o el actual si no se sabe)."""
@@ -269,9 +266,3 @@ class MainShell:
         if anterior in self._dirty:
             self._ensure_page(anterior)      # quedó filtrada: dejarla limpia otra vez
         self._ensure_around(n)
-
-    def _safe_update(self, control: ft.Control) -> None:
-        try:
-            control.update()
-        except Exception:
-            pass

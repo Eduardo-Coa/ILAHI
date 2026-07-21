@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Callable
 import flet as ft
 
-from models.song import Song, Section, Line, Syllable, Chord
+from models.song import Song, Section, Syllable, Chord
 from models.key_chords import chords_for_key
 from models.transposer import transpose_chord
 from utils.lyrics_parser import (parse_lyrics, merge_lyrics, is_chord_line,
@@ -20,7 +20,7 @@ from utils.lyrics_parser import (parse_lyrics, merge_lyrics, is_chord_line,
 from utils.metronome import valid_bpm
 from utils.song_text import SECTION_LABELS
 from views.widgets import (back_button, centered_header, floating_panel,
-                           square_button, wrap_lyric_line)
+                           square_button, wrap_lyric_line, _safe_update)
 import theme
 
 _PUNCT = set(",.;:!¡?¿…\"'()-—«»")
@@ -36,13 +36,6 @@ _ACTION_W = 140       # «Aplicar» y «Quitar», del mismo ancho
 # Las píldoras necesitan ancho explícito: sin él, dentro de un Row se estiran a
 # todo el ancho disponible. Tres caben en la fila (112×3 + espacios).
 _SLOT_W = 112
-
-
-def _safe_update(control: ft.Control) -> None:
-    try:
-        control.update()
-    except Exception:
-        pass
 
 
 def _themed_field(label: str, value: str = "", width: float | None = None) -> ft.TextField:

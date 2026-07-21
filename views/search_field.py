@@ -44,13 +44,6 @@ def search_pill(hint: str, on_change: Callable, trailing: ft.Control | None = No
     )
 
 
-def filter_menu(items: list[ft.PopupMenuItem]) -> ft.Control:
-    """Embudo de filtros que cuelga a la derecha de la píldora."""
-    return ft.PopupMenuButton(icon=ft.Icons.FILTER_ALT_OUTLINED,
-                              icon_color=theme.THEME["text_muted"],
-                              tooltip="Filtros", items=items)
-
-
 def filter_chip(label: str, on_clear: Callable[[], None],
                 visible: bool = True) -> ft.Container:
     """Chip del filtro activo, con ✕ para quitarlo."""

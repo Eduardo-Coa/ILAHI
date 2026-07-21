@@ -10,7 +10,6 @@ from __future__ import annotations
 import pytest
 
 import theme
-from views.theme_editor import _hex_to_rgb, _rgb_to_hex
 
 
 @pytest.fixture(autouse=True)
@@ -89,16 +88,3 @@ def test_el_snippet_exportado_incluye_cada_paleta_y_color():
     assert "SCRATCH: dict[str, str] = {" in snippet
     for key, _label in theme.EDITABLE_COLORS:
         assert f'"{key}":' in snippet
-
-
-def test_hex_a_rgb_y_vuelta():
-    assert _hex_to_rgb("#ff8800") == (255, 136, 0)
-    assert _rgb_to_hex(255, 136, 0) == "#ff8800"
-    assert _hex_to_rgb("#000000") == (0, 0, 0)
-    assert _hex_to_rgb("#ffffff") == (255, 255, 255)
-
-
-def test_hex_a_rgb_tolera_entradas_raras():
-    assert _hex_to_rgb("ff8800") == (255, 136, 0)       # sin almohadilla
-    assert _hex_to_rgb("#f3d365ff") == (243, 211, 101)  # con alfa: usa los 6 primeros
-    assert _hex_to_rgb("#zzz") == (0, 0, 0)             # inválido: negro, no revienta

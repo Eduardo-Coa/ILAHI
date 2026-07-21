@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 
-from utils.click_track import write_measure, ClickTrackError
+from utils.click_track import write_measure
 
 try:
     import flet_audio as _fta

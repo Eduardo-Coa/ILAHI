@@ -23,16 +23,21 @@ from views.metro_sound import MetroSound
 from utils.song_text import SECTION_LABELS
 from utils.lyrics_parser import is_chord_line
 from views.widgets import (back_button, circle_button, title_block,
-                           square_button, wrap_lyric_line, sheet_option)
+                           square_button, wrap_lyric_line, sheet_option,
+                           _safe_update, sheet_dialog, stepper_row)
 import theme
 
 
-def _safe_update(control: ft.Control) -> None:
-    """Actualiza el control solo si está montado (headless-safe)."""
-    try:
-        control.update()
-    except Exception:
-        pass
+# Casilla de acorde SIN letra (un acorde suelto, típicamente al final del verso):
+# un espacio de aire ANTES del guion de apoyo. Va antes y no después para que el
+# hueco quede parejo: con el aire detrás, la PRIMERA casilla se pegaba a la letra
+# («me-») y solo las siguientes se veían separadas. Cada casilla es su propia
+# columna con ``spacing=0``, así que el aire tiene que venir del texto; se usa
+# espacio DURO porque uno normal al borde de un ``Text`` el layout lo puede
+# recortar y no sumaría ancho. El acorde se corre ese mismo espacio para no
+# desalinearse de su guion.
+_SLOT_LEAD = "\u00a0"
+_SLOT_DASH = "-"
 
 
 def _word_chord_lyric(word_syllables: list[Syllable]) -> tuple[str, str]:
@@ -48,8 +53,13 @@ def _word_chord_lyric(word_syllables: list[Syllable]) -> tuple[str, str]:
     lyric_str = ""
     for syl in word_syllables:
         value = syl.chord.value if syl.chord else ""
-        # casilla de acorde sin letra (slot con acorde) → guión de apoyo
-        text = "-" if (value and not syl.text.strip()) else syl.text
+        # Casilla de acorde sin letra: el aire va ANTES del guion, y se suma a la letra
+        # antes de colocar el acorde para que este arranque en la misma columna que su
+        # guion (si no, quedaría un carácter a la izquierda).
+        es_casilla = bool(value) and not syl.text.strip()
+        if es_casilla:
+            lyric_str += _SLOT_LEAD
+        text = _SLOT_DASH if es_casilla else syl.text
         if value:
             # El acorde y su sílaba deben empezar en la misma columna, dejando ≥1
             # hueco tras el acorde anterior. Si esa columna queda más allá de la letra
@@ -362,14 +372,10 @@ class StageScreen:
                 ft.Icons.MUSIC_NOTE, "Editar acordes",
                 "Asignar acordes a las sílabas",
                 lambda _e: choose(self.on_edit)))
-        dialog = ft.AlertDialog(
-            modal=False,
-            shape=ft.RoundedRectangleBorder(radius=20),
-            bgcolor=theme.THEME["surface2"],
-            title=ft.Text("Editar", size=18, weight=ft.FontWeight.BOLD,
-                          color=theme.THEME["text"]),
+        dialog = sheet_dialog(
+            ft.Column(tight=True, spacing=2, controls=opciones),
+            title="Editar",
             content_padding=ft.Padding.only(left=8, right=8, bottom=8),
-            content=ft.Column(tight=True, spacing=2, controls=opciones),
         )
         self.page.show_dialog(dialog)
 
@@ -377,20 +383,14 @@ class StageScreen:
         """Cuadro «Tamaño del texto»: A− · número · A+ · Restablecer."""
         self._size_text = ft.Text(str(self.size), size=26, weight=ft.FontWeight.BOLD,
                                   color=theme.THEME["text"])
-        dialog = ft.AlertDialog(
-            modal=False,
-            shape=ft.RoundedRectangleBorder(radius=20),
-            bgcolor=theme.THEME["surface2"],
+        dialog = sheet_dialog(
             content_padding=ft.Padding.only(left=16, right=16, top=8, bottom=8),
             content=ft.Column(tight=True, spacing=10,
                               horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                               controls=[
                 ft.Text("Tamaño del texto", size=16, color=theme.THEME["text"]),
-                ft.Row(alignment=ft.MainAxisAlignment.CENTER, spacing=24, controls=[
-                    _circle_button("A−", lambda _e: self._resize(-2)),
-                    self._size_text,
-                    _circle_button("A+", lambda _e: self._resize(2)),
-                ]),
+                stepper_row("A−", lambda _e: self._resize(-2), self._size_text,
+                            "A+", lambda _e: self._resize(2)),
                 ft.TextButton("Restablecer", on_click=lambda _e: self._reset_size()),
             ]),
         )
@@ -453,12 +453,10 @@ class StageScreen:
 
         controles: list[ft.Control] = [
             ft.Text("Tono", size=16, color=theme.THEME["text"]),
-            ft.Row(alignment=ft.MainAxisAlignment.CENTER, spacing=24, controls=[
-                _circle_button("−", lambda _e: self._transpose(-1)),
-                ft.Column(centro, spacing=0, tight=True,
-                          horizontal_alignment=ft.CrossAxisAlignment.CENTER),
-                _circle_button("+", lambda _e: self._transpose(1)),
-            ]),
+            stepper_row("−", lambda _e: self._transpose(-1),
+                        ft.Column(centro, spacing=0, tight=True,
+                                  horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+                        "+", lambda _e: self._transpose(1)),
         ]
         # «Restablecer» solo tiene sentido si hay a dónde volver: en una lista, al
         # tono de la lista; persistiendo, al tono original (si está registrado).
@@ -467,13 +465,10 @@ class StageScreen:
             controles.append(ft.TextButton(etiqueta,
                                            on_click=lambda _e: self._reset_tone()))
 
-        dialog = ft.AlertDialog(
-            modal=False,
-            shape=ft.RoundedRectangleBorder(radius=20),
-            bgcolor=theme.THEME["surface2"],
+        dialog = sheet_dialog(
+            ft.Column(controles, tight=True, spacing=10,
+                      horizontal_alignment=ft.CrossAxisAlignment.CENTER),
             content_padding=ft.Padding.only(left=16, right=16, top=8, bottom=8),
-            content=ft.Column(controles, tight=True, spacing=10,
-                              horizontal_alignment=ft.CrossAxisAlignment.CENTER),
         )
         self.page.show_dialog(dialog)
 

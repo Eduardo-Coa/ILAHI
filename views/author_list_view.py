@@ -16,7 +16,8 @@ import flet as ft
 import theme
 from database.db import author_display
 from views.bottom_bar import build_bottom_bar
-from views.widgets import show_toast, segmented_toggle, logo_header
+from views.widgets import (show_toast, segmented_toggle, logo_header, _safe_update,
+                           confirm_dialog, list_row_card, confirm_row_card)
 from views.search_field import search_pill
 
 
@@ -97,24 +98,15 @@ class AuthorsScreen:
             return self._confirm_tile(author)
         fav = bool(author["favorite"])
         unknown = bool(author.get("unknown"))
-        return ft.Container(
-            key=f"author-{name}",
-            bgcolor=theme.THEME["surface"], border_radius=14,
-            padding=ft.Padding.symmetric(horizontal=4, vertical=6),
-            margin=ft.Margin.symmetric(horizontal=12, vertical=5),
-            content=ft.Row(
-                vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=2,
-                controls=[
-                    self._avatar(name, fav, unknown),
-                    ft.Container(
-                        expand=True, ink=True, border_radius=10,
-                        on_click=lambda _e: self.on_open_author(name),
-                        padding=ft.Padding.symmetric(horizontal=4, vertical=4),
-                        content=self._info(name, author["song_count"])),
-                    self._menu(name, fav, unknown),
-                ],
-            ),
-        )
+        return list_row_card([
+            self._avatar(name, fav, unknown),
+            ft.Container(
+                expand=True, ink=True, border_radius=10,
+                on_click=lambda _e: self.on_open_author(name),
+                padding=ft.Padding.symmetric(horizontal=4, vertical=4),
+                content=self._info(name, author["song_count"])),
+            self._menu(name, fav, unknown),
+        ], key=f"author-{name}")
 
     def _info(self, name: str, count: int) -> ft.Control:
         """Mismo formato de tres líneas que la barra de canción: nombre arriba,
@@ -190,19 +182,15 @@ class AuthorsScreen:
         else:
             cuantas = "su única canción" if n == 1 else f"sus {n} canciones"
             pregunta = f"¿Eliminar «{name}» y {cuantas}?"
-        return ft.Container(
-            key=f"confirm-{name}",
-            bgcolor=theme.THEME["surface"], border_radius=14,
-            padding=ft.Padding.symmetric(horizontal=16, vertical=10),
-            margin=ft.Margin.symmetric(horizontal=12, vertical=5),
-            content=ft.Column(spacing=6, controls=[
+        return confirm_row_card(
+            ft.Column(spacing=6, controls=[
                 ft.Text(pregunta, size=14, color=theme.THEME["danger"]),
                 ft.Row(alignment=ft.MainAxisAlignment.END, tight=True, controls=[
                     ft.TextButton("Sí, eliminar", on_click=lambda _e: self._do_delete(name)),
                     ft.TextButton("No", on_click=lambda _e: self._cancel_delete()),
                 ]),
             ]),
-        )
+            key=f"confirm-{name}")
 
     # ------------------------------------------------------------------
     # Acciones
@@ -241,12 +229,8 @@ class AuthorsScreen:
             self._refill(update=True)
             self._set_status(f"✓ Autor renombrado a «{new}»")
 
-        dialog = ft.AlertDialog(
-            modal=True,
-            shape=ft.RoundedRectangleBorder(radius=18),
-            bgcolor=theme.THEME["surface2"],
-            title=ft.Text("Editar nombre", color=theme.THEME["text"]),
-            content=field,
+        dialog = confirm_dialog(
+            "Editar nombre", field,
             actions=[
                 ft.TextButton("Cancelar", on_click=lambda _e: self.page.pop_dialog()),
                 ft.TextButton("Guardar", on_click=save),
@@ -254,11 +238,3 @@ class AuthorsScreen:
         )
         field.on_submit = save
         self.page.show_dialog(dialog)
-
-
-def _safe_update(control: ft.Control) -> None:
-    """Repinta un control; ignora el caso «aún no está en la página»."""
-    try:
-        control.update()
-    except Exception:
-        pass

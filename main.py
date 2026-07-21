@@ -29,7 +29,7 @@ from views.edit_view import NewSongScreen, EditSongScreen, EditLyricsScreen
 from views.settings_view import SettingsScreen
 from views.theme_editor import ThemeEditorScreen
 from views.main_shell import MainShell, HOME_INDEX
-from views.widgets import show_toast
+from views.widgets import show_toast, confirm_dialog, sheet_dialog
 from utils.prefs import get_pref, set_pref
 from utils.song_io import (
     load_songs, song_to_bytes, bundle_to_bytes, suggested_filename,
@@ -64,11 +64,6 @@ def bootstrap_db() -> Database:
 # Extensión de la copia de seguridad COMPLETA (SQLite): distinta de la del cancionero
 # (.hymnchords, solo canciones) para no confundir un backup con un cancionero.
 BACKUP_EXTENSION = ".hymnbak"
-
-
-def _ensure_ext(path: str) -> str:
-    """Garantiza que la ruta termine en .hymnchords."""
-    return path if path.lower().endswith(SONG_FILE_EXTENSION) else path + SONG_FILE_EXTENSION
 
 
 def main(page: ft.Page) -> None:
@@ -142,17 +137,10 @@ def main(page: ft.Page) -> None:
         """Vuelca las paletas como código pegable en ``theme.py``, a un archivo elegido
         (en el teléfono, Descargas). Devuelve el mensaje de estado."""
         data = theme.palette_source_snippet().encode("utf-8")
-        path = await file_picker.save_file(
-            dialog_title="Exportar paletas", file_name="theme_palettes.py",
-            allowed_extensions=["py", "txt"], src_bytes=data)
-        if not path:
-            return "Exportación cancelada"
-        if not (page.web or page.platform.is_mobile()):
-            try:
-                Path(path).write_bytes(data)
-            except OSError as ex:
-                return f"✗ No se pudo guardar: {ex}"
-        return "✓ Paletas exportadas a Descargas"
+        # ext=None: se guarda con el nombre que elija el usuario, sin forzar «.py».
+        msg = await save_bytes(data, "Exportar paletas", "theme_palettes.py",
+                               ext=None, allowed_extensions=["py", "txt"])
+        return msg or "✓ Paletas exportadas a Descargas"
 
     def go_theme_editor() -> None:
         editor = ThemeEditorScreen(
@@ -241,21 +229,30 @@ def main(page: ft.Page) -> None:
         except SongIOError as ex:
             go_home(status=f"✗ {ex}")
 
-    async def save_bytes(data: bytes, dialog_title: str, file_name: str) -> str:
-        """Guarda ``data`` con el diálogo nativo. Devuelve "" si salió bien.
+    async def save_bytes(data: bytes, dialog_title: str, file_name: str,
+                         ext: str | None = SONG_FILE_EXTENSION,
+                         allowed_extensions: list[str] | None = None) -> str:
+        """Guarda ``data`` con el diálogo nativo. Devuelve "" si salió bien, o el
+        mensaje de estado. ÚNICO punto donde se escribe un archivo elegido por el
+        usuario (cancionero, copia de seguridad y paletas), así que es también el único
+        lugar a tocar si iOS necesita otro trato.
 
         En Android/iOS (y web) el sistema escribe el archivo y por eso exige
-        ``src_bytes``; en escritorio el diálogo solo devuelve la ruta elegida y
-        el archivo lo escribimos nosotros.
+        ``src_bytes``; en escritorio el diálogo solo devuelve la ruta elegida y el
+        archivo lo escribimos nosotros, agregando ``ext`` si falta. Con ``ext=None`` se
+        respeta la ruta tal cual (lo que necesita la exportación de paletas).
         """
         path = await file_picker.save_file(
             dialog_title=dialog_title, file_name=file_name,
-            allowed_extensions=["hymnchords"], src_bytes=data)
+            allowed_extensions=allowed_extensions
+            or [SONG_FILE_EXTENSION.lstrip(".")], src_bytes=data)
         if not path:
             return "Exportación cancelada"
         if not (page.web or page.platform.is_mobile()):
             try:
-                Path(_ensure_ext(path)).write_bytes(data)
+                dest = (path if ext is None or path.lower().endswith(ext)
+                        else path + ext)
+                Path(dest).write_bytes(data)
             except OSError as ex:
                 return f"✗ No se pudo guardar el archivo: {ex}"
         return ""
@@ -300,24 +297,13 @@ def main(page: ft.Page) -> None:
             return
         name = f"hymnchords-backup-{datetime.now():%Y%m%d-%H%M}{BACKUP_EXTENSION}"
         try:
-            path = await file_picker.save_file(
-                dialog_title="Exportar copia de seguridad", file_name=name,
-                allowed_extensions=[BACKUP_EXTENSION.lstrip(".")], src_bytes=data)
-        except Exception as ex:
+            msg = await save_bytes(
+                data, "Exportar copia de seguridad", name, ext=BACKUP_EXTENSION,
+                allowed_extensions=[BACKUP_EXTENSION.lstrip(".")])
+        except Exception as ex:                       # el diálogo nativo falló
             show_toast(page, f"✗ {ex}")
             return
-        if not path:
-            show_toast(page, "Exportación cancelada")
-            return
-        if not (page.web or page.platform.is_mobile()):
-            try:
-                dest = path if path.lower().endswith(BACKUP_EXTENSION) \
-                    else path + BACKUP_EXTENSION
-                Path(dest).write_bytes(data)
-            except OSError as ex:
-                show_toast(page, f"✗ No se pudo guardar: {ex}")
-                return
-        show_toast(page, "✓ Copia de seguridad exportada")
+        show_toast(page, msg or "✓ Copia de seguridad exportada")
 
     def do_import_backup() -> None:
         """Restaurar reemplaza TODO, así que primero se confirma."""
@@ -325,15 +311,14 @@ def main(page: ft.Page) -> None:
             page.pop_dialog()
             page.run_task(_run_import_backup)
 
-        dialog = ft.AlertDialog(
-            modal=True, shape=ft.RoundedRectangleBorder(radius=20),
-            bgcolor=theme.THEME["surface2"],
-            title=ft.Text("Restaurar copia", size=18, weight=ft.FontWeight.BOLD,
-                          color=theme.THEME["text"]),
-            content=ft.Text(
+        # modal=True aunque use el chrome de «hoja»: restaurar es destructivo y no debe
+        # descartarse tocando fuera del cuadro.
+        dialog = sheet_dialog(
+            ft.Text(
                 "Reemplaza TODAS tus canciones y listas por las del archivo. Se guarda "
                 "una copia de lo actual por si acaso.", size=14,
                 color=theme.THEME["text_muted"]),
+            title="Restaurar copia", modal=True,
             actions=[
                 ft.TextButton("Cancelar", on_click=lambda _e: page.pop_dialog()),
                 ft.TextButton("Restaurar", on_click=confirmar),
@@ -360,11 +345,8 @@ def main(page: ft.Page) -> None:
     def show_data_location() -> None:
         """Cuadro informativo: dónde vive la base (carpeta privada de la app)."""
         carpeta = str(db.db_path.parent)
-        dialog = ft.AlertDialog(
-            modal=False, shape=ft.RoundedRectangleBorder(radius=20),
-            bgcolor=theme.THEME["surface2"],
-            title=ft.Text("Ubicación de datos", size=18, weight=ft.FontWeight.BOLD,
-                          color=theme.THEME["text"]),
+        dialog = sheet_dialog(
+            title="Ubicación de datos",
             content=ft.Column(tight=True, spacing=10, controls=[
                 ft.Text("Tus canciones y listas se guardan en la carpeta privada de la "
                         "app (sobrevive a actualizar, se borra al desinstalar):",
@@ -588,11 +570,8 @@ def main(page: ft.Page) -> None:
             go_setlist_detail(new_id)
 
         field.on_submit = crear
-        page.show_dialog(ft.AlertDialog(
-            modal=True, shape=ft.RoundedRectangleBorder(radius=18),
-            bgcolor=theme.THEME["surface2"],
-            title=ft.Text("Nueva lista", color=theme.THEME["text"]),
-            content=field,
+        page.show_dialog(confirm_dialog(
+            "Nueva lista", field,
             actions=[
                 ft.TextButton("Cancelar", on_click=lambda _e: page.pop_dialog()),
                 ft.TextButton("Crear", on_click=crear),

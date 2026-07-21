@@ -15,15 +15,7 @@ import flet as ft
 
 import theme
 from views.bottom_bar import build_bottom_bar
-from views.widgets import logo_header, circle_button
-
-
-def _safe_update(control) -> None:
-    """Repinta un control; ignora el caso «aún no está en la página»."""
-    try:
-        control.update()
-    except Exception:
-        pass
+from views.widgets import logo_header, _safe_update, sheet_dialog, stepper_row
 
 
 # Paleta de colores sugeridos para «Color de Acordes» (además del hex manual).
@@ -264,12 +256,8 @@ class SettingsScreen:
 
     def _open_theme_sheet(self) -> None:
         """Cuadro «Tema»: una fila por tema, con el diseño de los demás cuadros."""
-        dialog = ft.AlertDialog(
-            modal=False,
-            shape=ft.RoundedRectangleBorder(radius=20),
-            bgcolor=theme.THEME["surface2"],
-            title=ft.Text("Tema", size=18, weight=ft.FontWeight.BOLD,
-                          color=theme.THEME["text"]),
+        dialog = sheet_dialog(
+            title="Tema",
             content_padding=ft.Padding.only(left=8, right=8, bottom=8),
             content=ft.Column(tight=True, spacing=2,
                               controls=[self._theme_option(k)
@@ -326,13 +314,10 @@ class SettingsScreen:
                 ft.Text("Hecha con dedicación por Eduardo Coa.", size=13,
                         weight=ft.FontWeight.W_600, color=theme.THEME["text"]),
             ])
-        dialog = ft.AlertDialog(
-            modal=False, shape=ft.RoundedRectangleBorder(radius=20),
-            bgcolor=theme.THEME["surface2"],
-            title=ft.Text("Acerca de Ilahi", size=18, weight=ft.FontWeight.BOLD,
-                          color=theme.THEME["text"]),
+        dialog = sheet_dialog(
+            cuerpo,
+            title="Acerca de Ilahi",
             content_padding=ft.Padding.only(left=16, right=16, bottom=8),
-            content=cuerpo,
             actions=[ft.TextButton("Cerrar",
                                    on_click=lambda _e: self.page.pop_dialog())],
         )
@@ -380,9 +365,7 @@ class SettingsScreen:
             self._set_size(theme.SIZE_STAGE)
             paint()
 
-        dialog = ft.AlertDialog(
-            modal=False, shape=ft.RoundedRectangleBorder(radius=20),
-            bgcolor=theme.THEME["surface2"],
+        dialog = sheet_dialog(
             content_padding=ft.Padding.only(left=16, right=16, top=8, bottom=8),
             content=ft.Column(tight=True, spacing=10,
                               horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -390,11 +373,8 @@ class SettingsScreen:
                 ft.Text("Tamaño de letra", size=16, color=theme.THEME["text"]),
                 ft.Text("En canción y escenario", size=12,
                         color=theme.THEME["text_muted"]),
-                ft.Row(alignment=ft.MainAxisAlignment.CENTER, spacing=24, controls=[
-                    circle_button("A−", lambda _e: resize(-2)),
-                    num,
-                    circle_button("A+", lambda _e: resize(2)),
-                ]),
+                stepper_row("A−", lambda _e: resize(-2), num,
+                            "A+", lambda _e: resize(2)),
                 ft.TextButton("Restablecer", on_click=lambda _e: reset()),
             ]),
         )
@@ -435,14 +415,11 @@ class SettingsScreen:
                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
                            controls=[self._cc_badge, self._cc_line]))
         self._cc_editor_box = ft.Container(content=self._cc_editor())
-        dialog = ft.AlertDialog(
-            modal=False, shape=ft.RoundedRectangleBorder(radius=20),
-            bgcolor=theme.THEME["surface2"],
-            title=ft.Text("Color de Acordes", size=18, weight=ft.FontWeight.BOLD,
-                          color=theme.THEME["text"]),
+        dialog = sheet_dialog(
+            ft.Column(tight=True, spacing=12, width=320,
+                      controls=[preview, self._cc_editor_box]),
+            title="Color de Acordes",
             content_padding=ft.Padding.only(left=16, right=16, bottom=8),
-            content=ft.Column(tight=True, spacing=12, width=320,
-                              controls=[preview, self._cc_editor_box]),
         )
         self.page.show_dialog(dialog)
 

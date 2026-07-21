@@ -21,20 +21,7 @@ from typing import Awaitable, Callable
 import flet as ft
 
 import theme
-from views.widgets import back_button, show_toast
-
-
-def _hex_to_rgb(value: str) -> tuple[int, int, int]:
-    """``#rrggbb`` → (r, g, b). Tolera hex sin ``#`` o con alfa (usa los 6 primeros)."""
-    h = value.lstrip("#")[:6].ljust(6, "0")
-    try:
-        return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-    except ValueError:
-        return 0, 0, 0
-
-
-def _rgb_to_hex(r: int, g: int, b: int) -> str:
-    return "#%02x%02x%02x" % (int(r), int(g), int(b))
+from views.widgets import back_button, show_toast, _safe_update
 
 
 class ThemeEditorScreen:
@@ -171,7 +158,7 @@ class ThemeEditorScreen:
 
     # -- editor R/G/B del color elegido --------------------------------
     def _color_editor(self) -> ft.Control:
-        r, g, b = _hex_to_rgb(theme.THEME[self._sel_key])
+        r, g, b = theme.hex_to_rgb(theme.THEME[self._sel_key])
         self._sel_title = ft.Text(self._sel_label(), size=14, weight=ft.FontWeight.W_600,
                                   color=theme.THEME["text"])
         self._hex_field = ft.TextField(
@@ -260,18 +247,18 @@ class ThemeEditorScreen:
         self.refresh_page()
         if self._preview is not None:
             self._preview.content = self._build_preview()
-            self._safe_update(self._preview)
+            _safe_update(self._preview)
         sw = self._swatches.get(self._sel_key)
         if sw is not None:
             sw.bgcolor = value
-            self._safe_update(sw)
+            _safe_update(sw)
         if self._hex_field is not None and self._hex_field.value != value:
             self._hex_field.value = value
-            self._safe_update(self._hex_field)
+            _safe_update(self._hex_field)
 
     def _on_slider(self, _canal: str) -> None:
         rgb = tuple(int(self._sliders[c].value) for c in ("r", "g", "b"))
-        self._apply_color(_rgb_to_hex(*rgb))
+        self._apply_color(theme.rgb_to_hex(*rgb))
 
     def _on_hex_submit(self, e) -> None:
         raw = (e.control.value or "").strip()
@@ -280,11 +267,11 @@ class ThemeEditorScreen:
         if len(raw.lstrip("#")) < 6:
             show_toast(self.page, "✗ Hex inválido (usa #rrggbb)")
             return
-        value = _rgb_to_hex(*_hex_to_rgb(raw))     # normaliza
-        r, g, b = _hex_to_rgb(value)
+        value = theme.rgb_to_hex(*theme.hex_to_rgb(raw))     # normaliza
+        r, g, b = theme.hex_to_rgb(value)
         for canal, v in (("r", r), ("g", g), ("b", b)):
             self._sliders[canal].value = v
-            self._safe_update(self._sliders[canal])
+            _safe_update(self._sliders[canal])
         self._apply_color(value)
         self.persist()
 
@@ -294,13 +281,7 @@ class ThemeEditorScreen:
         el selector, la vista previa, los deslizadores y la lista deben rehacerse."""
         self.page.controls.clear()
         self.page.add(ft.SafeArea(content=self.build(), expand=True))
-        self._safe_update(self.page)
-
-    def _safe_update(self, control) -> None:
-        try:
-            control.update()
-        except Exception:
-            pass
+        _safe_update(self.page)
 
     async def _on_export(self, _e=None) -> None:
         msg = await self.export()

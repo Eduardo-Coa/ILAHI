@@ -285,6 +285,4 @@ FONT_MONO = "monospace"
 
 # Tamaños base en px (equivalen a los font sizes del escritorio).
 SIZE_STAGE = 14          # letra en vista escenario
-SIZE_CHORD_STAGE = 18    # acordes en vista escenario
-SIZE_LIST = 16           # lista de canciones
 SIZE_SECTION = 12        # etiquetas de sección

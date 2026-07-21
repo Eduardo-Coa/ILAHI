@@ -6,7 +6,7 @@ from models.song import Chord, Song
 from utils.lyrics_parser import (
     parse_lyrics, merge_lyrics, is_chord_line, CHORD_LINE_SLOTS,
     is_section_header, parse_section_header, detect_header,
-    is_chord_line_text, prepend_intro, INTRO_LABEL,
+    is_chord_line_text, is_chord_token, prepend_intro, INTRO_LABEL,
 )
 
 
@@ -262,6 +262,82 @@ def test_dos_lineas_de_acordes_bajo_encabezado_son_casillas():
     lyric = [l for l in final.lines
              if "".join(s.text for s in l.syllables).strip()]
     assert len(lyric) == 1
+
+
+def test_lineas_en_blanco_al_inicio_no_inventan_seccion():
+    """Regresión: una línea en blanco arriba abría una «Estrofa» fantasma vacía, porque
+    el parser aún no tenía sección y creaba una para colgarla. Cuenta también la línea
+    de solo espacios, fácil de arrastrar al copiar de una web."""
+    cuerpo = "[Intro]\nG   C   Am   D\n\n[Verse 1]\nCristo vive hoy\n"
+    esperado = [("Introducción", "intro"), ("Verse 1", "verse")]
+    for delante in ("", "\n", "   \n", "\n  \n\n"):
+        song = parse_lyrics(delante + cuerpo)
+        assert [(s.label, s.type) for s in song.sections] == esperado, repr(delante)
+
+
+def test_lineas_en_blanco_del_medio_siguen_separando():
+    """El descarte es SOLO al inicio: en el medio la línea vacía sigue haciendo su
+    trabajo de separar estrofas."""
+    song = parse_lyrics("[Verse 1]\nuno\n\n[Verse 2]\ndos\n")
+    assert [s.label for s in song.sections] == ["Verse 1", "Verse 2"]
+
+
+def test_encabezado_con_un_corchete_suelto_se_reconoce_igual():
+    """Al copiar de una web es fácil perder un corchete. Sin pareja, «Intro]» no se
+    reconocía y entraba como LETRA."""
+    assert detect_header("Intro]") == ("Introducción", "intro")
+    assert detect_header("[Intro") == ("Introducción", "intro")
+    assert detect_header("Verse 1]") == ("Verse 1", "verse")
+    assert detect_header("[Intro]") == ("Introducción", "intro")   # completo, igual
+    assert detect_header("Intro") == ("Introducción", "intro")     # sin corchetes, igual
+
+
+def test_un_corchete_suelto_no_inventa_secciones():
+    """Regresión: «Intro]» abría una estrofa sin etiqueta (con «Intro]» de letra) y
+    además empujaba el bloque de acordes de la entrada a un «Interludio»."""
+    song = parse_lyrics("Intro]\nG   C   Am   D\n\n[Verse 1]\nCristo vive hoy")
+    assert [(s.label, s.type) for s in song.sections] == [
+        ("Introducción", "intro"),
+        ("Verse 1", "verse"),
+    ]
+
+
+def test_reparar_corchetes_no_toca_lineas_normales():
+    """Una línea sin corchetes, o con corchetes internos, se deja como está."""
+    assert detect_header("Cristo vive hoy") is None
+    assert detect_header("y el sol [de la mañana] salió") is None
+
+
+def test_acorde_entre_parentesis_se_reconoce_y_se_guarda_sin_ellos():
+    """«(G)» es la convención de acorde opcional/de paso. Se acepta como acorde, pero se
+    guarda SIN paréntesis: con ellos ``transpose_chord`` lo dejaría igual y se quedaría
+    sin transponer mientras el resto de la canción sí cambia de tono."""
+    assert is_chord_token("(G)") is True
+    assert is_chord_token("(Am7)") is True
+    assert is_chord_token("(hola)") is False      # letra entre paréntesis, no acorde
+    assert is_chord_token("C(add9)") is True      # paréntesis INTERNOS: ya se aceptaban
+
+
+def test_una_linea_con_acorde_entre_parentesis_sigue_siendo_de_acordes():
+    """Regresión: bastaba un «(G)» para que la línea entera dejara de contar como
+    acordes y se procesara como letra, dejando el verso de abajo SIN acordes."""
+    texto = "        Am7          G7     (G)\nand try harder to be true?"
+    assert is_chord_line_text("        Am7          G7     (G)") is True
+    song = parse_lyrics(texto)
+    linea = [l for l in song.sections[0].lines
+             if "".join(s.text for s in l.syllables).strip()][0]
+    assert "".join(s.text for s in linea.syllables).strip() == "and try harder to be true?"
+    assert _chords_of(linea) == ["Am7", "G7", "G"]     # el (G) entró, ya sin paréntesis
+
+
+def test_un_acorde_pasado_el_final_del_verso_recibe_su_casilla():
+    """Un acorde que cae más allá de la última sílaba no se pierde ni pisa al anterior:
+    se le intercala una casilla vacía propia."""
+    song = parse_lyrics("        Am7          G7     (G)\nand try harder to be true?")
+    linea = [l for l in song.sections[0].lines
+             if "".join(s.text for s in l.syllables).strip()][0]
+    suelto = [s for s in linea.syllables if s.chord and not s.text.strip()]
+    assert len(suelto) == 1 and suelto[0].chord.value == "G"
 
 
 def test_detectar_acordes_apagado_toma_todo_como_letra():

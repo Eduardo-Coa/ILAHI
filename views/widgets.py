@@ -12,6 +12,11 @@ import flet as ft
 from models.song import Syllable
 import theme
 
+# Aire que deben dejar ABAJO las listas que conviven con un botón flotante (el ＋ del
+# panel principal o el ▶ del detalle de lista): sin él, el botón tapa el último
+# elemento y no se puede llegar a tocarlo. Cubre la altura del botón más su margen.
+FAB_CLEARANCE = 96
+
 
 def _safe_update(control) -> None:
     """Repinta un control; ignora el caso «aún no está en la página»."""
@@ -299,6 +304,105 @@ def circle_button(label: str, on_click, diameter: int = 56,
         alignment=ft.Alignment.CENTER, on_click=on_click,
         content=ft.Text(label, size=max(13, diameter // 3),
                         color=theme.THEME["text"]),
+    )
+
+
+def confirm_row_card(content: ft.Control, key=None) -> ft.Container:
+    """Tarjeta de la fila «¿Eliminar…?» que reemplaza en el sitio a una fila de la lista.
+    Mismo fondo y esquinas que ``list_row_card``, con más padding para que respire la
+    pregunta. El CONTENIDO lo arma cada vista: la de canciones lo pone en fila y la de
+    autores en columna (la pregunta es más larga)."""
+    return ft.Container(
+        key=key,
+        bgcolor=theme.THEME["surface"], border_radius=14,
+        padding=ft.Padding.symmetric(horizontal=16, vertical=10),
+        margin=ft.Margin.symmetric(horizontal=12, vertical=5),
+        content=content,
+    )
+
+
+def stepper_row(minus_label: str, on_minus, center: ft.Control,
+                plus_label: str, on_plus) -> ft.Row:
+    """Fila «− valor +» de los cuadros (tamaño de letra, tono): dos botones redondos
+    con el valor en el medio. El ± del metrónomo NO usa esto: va más chico y sobre otro
+    fondo, dentro del panel del escenario."""
+    return ft.Row(alignment=ft.MainAxisAlignment.CENTER, spacing=24, controls=[
+        circle_button(minus_label, on_minus),
+        center,
+        circle_button(plus_label, on_plus),
+    ])
+
+
+def list_row_card(controls: list[ft.Control], key=None) -> ft.Container:
+    """Tarjeta de UNA fila de lista (canción, autor, lista, ítem de lista). Unifica el
+    fondo, las esquinas y el padding/margen para que todas las listas de la app se vean
+    iguales. La ``key`` estable evita que Flet reutilice controles al reordenar."""
+    return ft.Container(
+        key=key,
+        bgcolor=theme.THEME["surface"], border_radius=14,
+        padding=ft.Padding.symmetric(horizontal=4, vertical=6),
+        margin=ft.Margin.symmetric(horizontal=12, vertical=5),
+        content=ft.Row(vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=2,
+                       controls=controls),
+    )
+
+
+def sheet_dialog(content: ft.Control, title: str | None = None,
+                 content_padding=None, actions: list | None = None,
+                 modal: bool = False) -> ft.AlertDialog:
+    """Cuadro tipo «hoja» de la app: esquinas de 20, fondo ``surface2`` y título en
+    negrita. Es el chrome de los cuadros de Añadir, Tema, Tono, Acerca de…
+
+    ``content_padding=None`` y ``actions=[]`` son los defaults de ``AlertDialog``, así
+    que omitirlos aquí deja el cuadro exactamente igual que sin pasarlos."""
+    return ft.AlertDialog(
+        modal=modal,
+        shape=ft.RoundedRectangleBorder(radius=20),
+        bgcolor=theme.THEME["surface2"],
+        title=(ft.Text(title, size=18, weight=ft.FontWeight.BOLD,
+                       color=theme.THEME["text"]) if title else None),
+        content_padding=content_padding,
+        content=content,
+        actions=actions if actions is not None else [],
+    )
+
+
+def confirm_dialog(title: str, content: ft.Control, actions: list) -> ft.AlertDialog:
+    """Cuadro de confirmación/pregunta: más chico (esquinas de 18), modal y con el
+    título sin negrita. Para «¿Eliminar…?», «Editar nombre», «Nueva lista»…"""
+    return ft.AlertDialog(
+        modal=True, shape=ft.RoundedRectangleBorder(radius=18),
+        bgcolor=theme.THEME["surface2"],
+        title=ft.Text(title, color=theme.THEME["text"]),
+        content=content, actions=actions)
+
+
+def accent_fab(icon: str, tooltip: str, on_click) -> ft.Control:
+    """Botón flotante (＋ / ▶) con el acento del tema. Solo el botón: cada vista lo
+    envuelve en su propio contenedor, porque la posición cambia según lleve o no
+    barra inferior debajo."""
+    return ft.FloatingActionButton(
+        icon=icon, tooltip=tooltip,
+        bgcolor=theme.THEME["accent"], foreground_color=theme.THEME["bg"],
+        shape=ft.RoundedRectangleBorder(radius=18),
+        on_click=on_click)
+
+
+def key_badge(key: str | None) -> ft.Control:
+    """Badge redondeado con el tono de la canción (lista de canciones y detalle de
+    lista lo comparten). Sin tono, muestra un guion."""
+    return ft.Container(
+        width=52, height=52,
+        border=ft.Border.all(1, theme.THEME["chord"]),
+        border_radius=12, bgcolor=theme.THEME["chord_bg"],
+        alignment=ft.Alignment.CENTER,
+        content=ft.Column([
+            ft.Text(key or "—", size=17, weight=ft.FontWeight.BOLD,
+                    color=theme.THEME["chord"]),
+            ft.Text("Tono", size=8, color=theme.THEME["text_muted"]),
+        ], spacing=0, tight=True,
+            alignment=ft.MainAxisAlignment.CENTER,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER),
     )
 
 

@@ -52,8 +52,9 @@ def test_is_dark_por_tema():
 def test_hex_y_rgb_ida_y_vuelta():
     assert theme.hex_to_rgb("#ff8800") == (255, 136, 0)
     assert theme.rgb_to_hex(255, 136, 0) == "#ff8800"
-    assert theme.hex_to_rgb("f18000") == (241, 128, 0)      # sin almohadilla
-    assert theme.hex_to_rgb("#zzz") == (0, 0, 0)            # inválido: negro, no revienta
+    assert theme.hex_to_rgb("f18000") == (241, 128, 0)         # sin almohadilla
+    assert theme.hex_to_rgb("#f3d365ff") == (243, 211, 101)    # con alfa: usa los 6 primeros
+    assert theme.hex_to_rgb("#zzz") == (0, 0, 0)               # inválido: negro, no revienta
 
 
 def test_prefs_ida_y_vuelta(tmp_path):

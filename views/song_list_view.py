@@ -13,10 +13,12 @@ from typing import Callable
 import flet as ft
 
 import theme
-from views.bottom_bar import TABS as _TABS, build_bottom_bar, fill_bar
+from views.bottom_bar import build_bottom_bar, fill_bar
 from views.search_field import search_pill, filter_chip
 from views.widgets import (sheet_option as _sheet_option, show_toast,
-                           segmented_toggle, logo_header)
+                           segmented_toggle, logo_header, _safe_update, key_badge,
+                           accent_fab, sheet_dialog, list_row_card, confirm_row_card,
+                           FAB_CLEARANCE)
 from database.db import author_display
 
 
@@ -38,12 +40,8 @@ def show_add_sheet(page, on_new: Callable[[], None], on_import: Callable,
         page.pop_dialog()
         on_new()
 
-    page.show_dialog(ft.AlertDialog(
-        modal=False,
-        shape=ft.RoundedRectangleBorder(radius=20),
-        bgcolor=theme.THEME["surface2"],
-        title=ft.Text("Añadir", size=18, weight=ft.FontWeight.BOLD,
-                      color=theme.THEME["text"]),
+    page.show_dialog(sheet_dialog(
+        title="Añadir",
         content_padding=ft.Padding.only(left=8, right=8, bottom=8),
         content=ft.Column(tight=True, spacing=2, controls=[
             _sheet_option(ft.Icons.ADD, "Nueva canción",
@@ -95,7 +93,10 @@ class SongsScreen:
         self.on_clear_author = on_clear_author
         self._query = query
         self._confirm_delete_id: int | None = None
-        self._list = ft.ListView(expand=True, controls=[])
+        # El ＋ flotante del panel vive encima de la lista: se reserva aire abajo para
+        # que el último elemento se pueda desplazar por encima del botón.
+        self._list = ft.ListView(expand=True, controls=[],
+                                 padding=ft.Padding.only(bottom=FAB_CLEARANCE))
         self._bar = ft.Row(spacing=0)
 
     # ------------------------------------------------------------------
@@ -138,7 +139,7 @@ class SongsScreen:
     def _clear_author(self) -> None:
         self._author = None
         self._chip_box.visible = False
-        self._safe_update(self._chip_box)
+        _safe_update(self._chip_box)
         self._refill(update=True)
 
     def _search_field(self) -> ft.Control:
@@ -160,11 +161,8 @@ class SongsScreen:
             # Embebida, la barra inferior está fuera de esta pantalla (la pone el
             # shell), así que el FAB baja para no quedar flotando alto.
             right=18, bottom=90 if not self.embedded else 24,
-            content=ft.FloatingActionButton(
-                icon=ft.Icons.ADD, tooltip="Añadir",
-                bgcolor=theme.THEME["accent"], foreground_color=theme.THEME["bg"],
-                shape=ft.RoundedRectangleBorder(radius=18),
-                on_click=lambda _e: self._open_add_sheet()),
+            content=accent_fab(ft.Icons.ADD, "Añadir",
+                               lambda _e: self._open_add_sheet()),
         )
 
     def _open_add_sheet(self) -> None:
@@ -195,18 +193,11 @@ class SongsScreen:
         self._set_status("")
         self._refill(update=True)
         fill_bar(self._bar, self._tab, self._select_tab)
-        self._safe_update(self._bar)
+        _safe_update(self._bar)
 
     def _set_status(self, status: str) -> None:
         self.status = status
         show_toast(self.page, status)     # confirmación flotante (toast)
-
-    def _safe_update(self, control: ft.Control) -> None:
-        """Repinta un control; ignora el caso «aún no está en la página»."""
-        try:
-            control.update()
-        except Exception:
-            pass
 
     def _on_query(self, e) -> None:
         self._query = e.control.value or ""
@@ -232,7 +223,7 @@ class SongsScreen:
                 key="empty", padding=20,
                 content=ft.Text(self._empty_message(), color=theme.THEME["text_muted"]))]
         if update:
-            self._safe_update(self._list)
+            _safe_update(self._list)
 
     # ------------------------------------------------------------------
     # Tarjeta de canción
@@ -245,25 +236,16 @@ class SongsScreen:
         # `key` estable: sin ella Flet reconcilia los hijos por posición y, al
         # cambiar el largo de la lista (p. ej. Biblioteca → Favoritos), reutiliza
         # controles de otra canción arrastrando sus handlers.
-        return ft.Container(
-            key=f"song-{sid}",
-            bgcolor=theme.THEME["surface"], border_radius=14,
-            padding=ft.Padding.symmetric(horizontal=4, vertical=6),
-            margin=ft.Margin.symmetric(horizontal=12, vertical=5),
-            content=ft.Row(
-                vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=2,
-                controls=[
-                    self._star(sid, fav),
-                    ft.Container(
-                        expand=True, ink=True, border_radius=10,
-                        on_click=lambda _e: self.on_open_song(sid),
-                        padding=ft.Padding.symmetric(horizontal=4, vertical=4),
-                        content=self._info(song)),
-                    self._key_badge(song.get("key")),
-                    self._menu(sid, fav),
-                ],
-            ),
-        )
+        return list_row_card([
+            self._star(sid, fav),
+            ft.Container(
+                expand=True, ink=True, border_radius=10,
+                on_click=lambda _e: self.on_open_song(sid),
+                padding=ft.Padding.symmetric(horizontal=4, vertical=4),
+                content=self._info(song)),
+            key_badge(song.get("key")),
+            self._menu(sid, fav),
+        ], key=f"song-{sid}")
 
     def _star(self, sid: int, fav: bool) -> ft.Control:
         """★ si es favorita, ♪ si no. Tocarla alterna el favorito."""
@@ -287,22 +269,6 @@ class SongsScreen:
                         color=theme.THEME["text_muted"]),
             ], spacing=4, tight=True),
         ], spacing=1, tight=True)
-
-    def _key_badge(self, key: str | None) -> ft.Control:
-        """Badge redondeado con el tono de la canción."""
-        return ft.Container(
-            width=52, height=52,
-            border=ft.Border.all(1, theme.THEME["chord"]),
-            border_radius=12, bgcolor=theme.THEME["chord_bg"],
-            alignment=ft.Alignment.CENTER,
-            content=ft.Column([
-                ft.Text(key or "—", size=17, weight=ft.FontWeight.BOLD,
-                        color=theme.THEME["chord"]),
-                ft.Text("Tono", size=8, color=theme.THEME["text_muted"]),
-            ], spacing=0, tight=True,
-                alignment=ft.MainAxisAlignment.CENTER,
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER),
-        )
 
     def _menu(self, sid: int, fav: bool) -> ft.Control:
         return ft.PopupMenuButton(
@@ -328,12 +294,8 @@ class SongsScreen:
 
     def _confirm_tile(self, song: dict) -> ft.Control:
         sid = song["id"]
-        return ft.Container(
-            key=f"confirm-{sid}",
-            bgcolor=theme.THEME["surface"], border_radius=14,
-            padding=ft.Padding.symmetric(horizontal=16, vertical=10),
-            margin=ft.Margin.symmetric(horizontal=12, vertical=5),
-            content=ft.Row(
+        return confirm_row_card(
+            ft.Row(
                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 controls=[
@@ -345,7 +307,7 @@ class SongsScreen:
                     ], tight=True),
                 ],
             ),
-        )
+            key=f"confirm-{sid}")
 
     # ------------------------------------------------------------------
     # Acciones

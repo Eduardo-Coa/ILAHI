@@ -63,11 +63,3 @@ class Song:
     capo: int = 0
     notes: str | None = None
     sections: list[Section] = field(default_factory=list)
-
-    def all_syllables(self) -> list[Syllable]:
-        """Devuelve todas las sílabas de la canción en orden."""
-        result = []
-        for section in self.sections:
-            for line in section.lines:
-                result.extend(line.syllables)
-        return result
