@@ -3,6 +3,7 @@
 from __future__ import annotations
 import logging
 import sqlite3
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -14,6 +15,9 @@ _log = logging.getLogger("hymnchords.db")
 
 # Número de copias de seguridad a conservar (rotación).
 BACKUP_KEEP = 10
+
+# Tablas que confirman que un archivo es una copia de la app (no cualquier SQLite).
+_BACKUP_REQUIRED_TABLES = {"songs", "sections", "setlists", "setlist_songs"}
 
 # Marcador del "autor" que agrupa las canciones sin autor asignado. No es un
 # nombre real (por eso el prefijo raro): distingue «filtrar sin autor» de «sin
@@ -105,6 +109,65 @@ class Database:
         )
         for old in backups[:-BACKUP_KEEP]:
             old.unlink(missing_ok=True)
+
+    # ------------------------------------------------------------------
+    # Copia de seguridad manual (exportar / restaurar a un archivo elegido)
+    # ------------------------------------------------------------------
+
+    @property
+    def db_path(self) -> Path:
+        """Ruta del archivo SQLite de la app (para «Ubicación de datos»)."""
+        return self._config.path
+
+    def export_bytes(self) -> bytes:
+        """Snapshot CONSISTENTE de toda la base (canciones, listas, favoritos) como
+        bytes, para «Exportar copia de seguridad». Usa la API de backup de SQLite a un
+        archivo temporal —seguro aunque la conexión esté viva— y devuelve su contenido."""
+        with tempfile.TemporaryDirectory() as tmp:
+            snapshot = Path(tmp) / "export.db"
+            dest = sqlite3.connect(str(snapshot))
+            try:
+                self._connect().backup(dest)
+            finally:
+                dest.close()
+            return snapshot.read_bytes()
+
+    @staticmethod
+    def is_valid_backup(data: bytes) -> bool:
+        """¿``data`` es una copia de seguridad de la app? Comprueba la cabecera SQLite y
+        que estén las tablas propias, para no restaurar un archivo cualquiera."""
+        if not data.startswith(b"SQLite format 3\x00"):
+            return False
+        with tempfile.TemporaryDirectory() as tmp:
+            candidate = Path(tmp) / "check.db"
+            candidate.write_bytes(data)
+            try:
+                conn = sqlite3.connect(str(candidate))
+                try:
+                    rows = conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    ).fetchall()
+                finally:
+                    conn.close()
+            except sqlite3.Error:
+                return False
+        return _BACKUP_REQUIRED_TABLES.issubset({r[0] for r in rows})
+
+    def restore_bytes(self, data: bytes) -> None:
+        """Reemplaza la base ACTUAL por la del backup (semántica de restaurar). Antes crea
+        una copia de seguridad de lo que había (red de seguridad). Lanza ``ValueError`` si
+        el archivo no es una copia válida de la app.
+        """
+        if not self.is_valid_backup(data):
+            raise ValueError("El archivo no es una copia de seguridad válida.")
+        self.backup("pre-restore")           # respalda lo actual por si acaso
+        self.close()
+        # Limpia journals sueltos antes de pisar el archivo, para no mezclar estados.
+        for suffix in ("-journal", "-wal", "-shm"):
+            Path(str(self._config.path) + suffix).unlink(missing_ok=True)
+        self._config.path.parent.mkdir(parents=True, exist_ok=True)
+        self._config.path.write_bytes(data)
+        self.init_schema()                   # reabre y asegura el esquema (idempotente)
 
     # ------------------------------------------------------------------
     # Inicialización del esquema

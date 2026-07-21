@@ -52,16 +52,24 @@ def fill_bar(row: ft.Row, active: str, on_select: Callable[[str], None]) -> ft.R
 
 def build_bottom_bar(active: str, on_select: Callable[[str], None],
                      row: ft.Row | None = None) -> ft.Control:
-    """Panel anclado abajo, con las esquinas superiores redondeadas.
+    """Panel anclado abajo, con las esquinas superiores redondeadas y SOLO una línea
+    fina arriba (sin recuadro).
 
-    El borde debe ser **uniforme**: Flutter no acepta ``borderRadius`` sobre un
-    borde de un solo lado.
+    Antes se usaba ``Border.all`` (recuadro completo) porque Flutter no admite
+    ``borderRadius`` con un borde de un solo lado. Pero en temas donde el borde es muy
+    visible —p. ej. Oscuro, con borde blanco sobre negro— ese recuadro dibujaba una
+    línea inferior fea. Ahora la línea va como un hijo de 1 px arriba y se recorta a las
+    esquinas redondeadas con ``clip_behavior``; así no hay líneas a los lados ni abajo.
     """
     row = fill_bar(row if row is not None else ft.Row(spacing=0), active, on_select)
     return ft.Container(
         bgcolor=theme.THEME["surface"],
-        border=ft.Border.all(1, theme.THEME["border"]),
         border_radius=ft.BorderRadius.only(top_left=18, top_right=18),
-        padding=ft.Padding.symmetric(vertical=6),
-        content=row,
+        clip_behavior=ft.ClipBehavior.ANTI_ALIAS,   # recorta la línea a las esquinas
+        content=ft.Column(
+            spacing=0, horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+            controls=[
+                ft.Container(height=1, bgcolor=theme.THEME["border"]),   # línea superior
+                ft.Container(padding=ft.Padding.symmetric(vertical=6), content=row),
+            ]),
     )

@@ -161,10 +161,14 @@ class NewSongScreen:
     """Formulario: metadatos + pegar letra → procesar (silabificar) → editor."""
 
     def __init__(self, db, on_created: Callable[[int], None],
-                 on_back: Callable[[], None]) -> None:
+                 on_back: Callable[[], None],
+                 detect_chords: bool = True) -> None:
         self.db = db
         self.on_created = on_created
         self.on_back = on_back
+        # «Detectar acordes al pegar» (Ajustes): si está apagado, ``parse_lyrics`` toma
+        # todo como letra y no interpreta las líneas de acordes.
+        self.detect_chords = detect_chords
 
         self._title = _themed_field("Título")
         self._author = _themed_field("Autor")
@@ -212,7 +216,7 @@ class NewSongScreen:
         if not text.strip():
             self._show("Pega la letra primero.")
             return
-        song = parse_lyrics(text, title)
+        song = parse_lyrics(text, title, detect_chords=self.detect_chords)
         normalize_intro(song)        # toda canción nueva empieza con «Introducción» completa
         song.author = (self._author.value or "").strip() or None
         song.key = (self._key.value or "").strip() or None

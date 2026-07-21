@@ -23,10 +23,10 @@ def test_set_theme_muta_en_sitio():
     original = dict(theme.THEME)
     ident = id(theme.THEME)
     try:
-        theme.set_theme("pergamino")
+        theme.set_theme("oscuro")
         assert id(theme.THEME) == ident            # mismo dict, mutado en sitio
-        assert theme.THEME["bg"] == theme.PARCHMENT["bg"]
-        assert theme.active_theme() == "pergamino"
+        assert theme.THEME["bg"] == theme.OSCURO["bg"]
+        assert theme.active_theme() == "oscuro"
         assert theme.DARK["bg"] == "#000000"       # la paleta original, intacta
     finally:
         theme.set_theme(theme.DEFAULT_THEME)
@@ -39,14 +39,21 @@ def test_set_theme_nombre_invalido():
 
 
 def test_is_dark_por_tema():
-    esperado = {"noche": True, "medianoche": True,
-                "pergamino": False, "alba": False}
+    esperado = {"noche": True, "oscuro": True, "medianoche": True,
+                "alba": False}
     try:
         for nombre, oscuro in esperado.items():
             theme.set_theme(nombre)
             assert theme.is_dark() == oscuro, nombre
     finally:
         theme.set_theme(theme.DEFAULT_THEME)
+
+
+def test_hex_y_rgb_ida_y_vuelta():
+    assert theme.hex_to_rgb("#ff8800") == (255, 136, 0)
+    assert theme.rgb_to_hex(255, 136, 0) == "#ff8800"
+    assert theme.hex_to_rgb("f18000") == (241, 128, 0)      # sin almohadilla
+    assert theme.hex_to_rgb("#zzz") == (0, 0, 0)            # inválido: negro, no revienta
 
 
 def test_prefs_ida_y_vuelta(tmp_path):

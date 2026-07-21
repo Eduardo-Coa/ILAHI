@@ -13,8 +13,9 @@ __pycache__/
 storage/
 .hymnchordsmobile/
 
-# Artefactos de build de Flet / Flutter
-build/
+# Artefactos de build de Flet / Flutter (solo el build/ del root; NO flet_template/build,
+# que es la plantilla de build propia y SÍ va versionada).
+/build/
 dist/
 *.apk
 *.aab

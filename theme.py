@@ -39,42 +39,43 @@ DARK: dict[str, str] = {
     "beat_one":      "#5fd38a",
 }
 
-# --- MEDIANOCHE: oscuro «dim». Azul profundo de la marca, menos contraste duro
-# que el negro; para ensayar de noche con la vista descansada.
+# --- OSCURO: negro absoluto de alto contraste. Fondo y paneles negros, texto/acento/
+# bordes en blanco (look «contorno») y acordes en naranja. Definido con el editor de
+# temas sobre el teléfono.
+OSCURO: dict[str, str] = {
+    "bg":            "#000000",
+    "surface":       "#0c0b0c",   # paneles/tarjetas: apenas sobre el negro
+    "surface2":      "#0c0b0c",
+    "border":        "#ffffff",
+    "text":          "#ffffff",
+    "text_muted":    "#777777",
+    "accent":        "#ffffff",
+    "chord":         "#f18000",
+    "chord_bg":      "#000000",
+    "verse_bg":      "#000000",
+    "chorus_bg":     "#000000",
+    "section_label": "#555555",
+    "danger":        "#ff0000",
+    "beat_one":      "#5fd38a",
+}
+
+# --- MEDIANOCHE: fondo negro con paneles navy y acento azul frío; acordes en
+# verde-azulado. Afinado con el editor de temas sobre el teléfono.
 MIDNIGHT: dict[str, str] = {
-    "bg":            "#161624",   # el Fondo GENERAL de la marca como base
+    "bg":            "#000000",
     "surface":       "#19284b",   # paneles en el navy (R25 G40 B75)
     "surface2":      "#223159",
     "border":        "#2e3f6b",
     "text":          "#e8e4d8",
     "text_muted":    "#8a93b2",
-    "chord":         "#f3d365",   # oro claro: más luz sobre el navy
-    "chord_bg":      "#101a33",
-    "verse_bg":      "#1b1b30",
-    "chorus_bg":     "#1a2440",
-    "section_label": "#66719a",
-    "accent":        "#f3d365",
-    "danger":        "#d97b7b",
+    "chord":         "#37a095",   # verde-azulado
+    "chord_bg":      "#171100",
+    "verse_bg":      "#000000",
+    "chorus_bg":     "#000000",
+    "section_label": "#747171",
+    "accent":        "#a2b7ff",   # azul frío
+    "danger":        "#c03638",
     "beat_one":      "#5fd38a",   # pulso del golpe 1
-}
-
-# --- PERGAMINO: claro cálido. Papel crema de la marca, tinta azul marino y
-# acordes marrón sobre oro: estética de himnario clásico, para día/exterior.
-PARCHMENT: dict[str, str] = {
-    "bg":            "#f8e9c2",   # crema de la marca (R248 G233 B194)
-    "surface":       "#fffbee",   # tarjetas «papel» más claras que el fondo
-    "surface2":      "#fff4d6",
-    "border":        "#e2d3a8",
-    "text":          "#19284b",   # tinta navy de la marca
-    "text_muted":    "#6e6749",
-    "chord":         "#573814",   # marrón de la marca (R87 G56 B20)
-    "chord_bg":      "#f3d365",   # badge dorado
-    "verse_bg":      "#fff9e8",
-    "chorus_bg":     "#fbf0d4",
-    "section_label": "#a39668",
-    "accent":        "#ad6023",   # ámbar de la marca (R173 G96 B35)
-    "danger":        "#b04030",
-    "beat_one":      "#2e8b57",   # pulso del golpe 1: verde oscuro, se ve sobre el crema
 }
 
 # --- ALBA: claro frío. Blanco/gris azulado con el navy de la marca como única
@@ -96,26 +97,67 @@ DAWN: dict[str, str] = {
     "beat_one":      "#2e8b57",   # pulso del golpe 1: verde oscuro, se ve sobre el claro
 }
 
+# --- SCRATCH: paleta de PRUEBAS del editor de temas (solo desarrollo). Arranca
+# como copia de Noche; sirve para inventar temas sin tocar los cuatro definitivos.
+# No aparece en el selector del usuario (ver USER_THEMES); solo la ve el editor.
+SCRATCH: dict[str, str] = dict(DARK)
+
 # --- Registro ----------------------------------------------------------------
 PALETTES: dict[str, dict[str, str]] = {
     "noche":      DARK,
+    "oscuro":     OSCURO,
     "medianoche": MIDNIGHT,
-    "pergamino":  PARCHMENT,
     "alba":       DAWN,
+    "scratch":    SCRATCH,
 }
+
+# Los temas que el usuario final ve en Ajustes (scratch queda fuera: es del editor).
+USER_THEMES: list[str] = ["noche", "oscuro", "medianoche", "alba"]
 
 # Nombre visible y personalidad (para el selector de tema en Ajustes).
 LABELS: dict[str, str] = {
     "noche":      "Noche",
+    "oscuro":     "Oscuro",
     "medianoche": "Medianoche",
-    "pergamino":  "Pergamino",
     "alba":       "Alba",
+    "scratch":    "Scratch",
 }
 DESCRIPTIONS: dict[str, str] = {
     "noche":      "Negro puro y oro; máximo contraste para tarima",
-    "medianoche": "Azul profundo, más suave para ensayar de noche",
-    "pergamino":  "Papel crema y tinta navy, como un himnario",
+    "oscuro":     "Negro absoluto, texto blanco y acordes naranja",
+    "medianoche": "Negro con azul frío, suave para ensayar de noche",
     "alba":       "Claro y neutro, con el azul de la marca",
+    "scratch":    "Paleta de pruebas del editor",
+}
+
+# Editor de temas: solo en desarrollo. Con esto en False, la fila de Ajustes que lo
+# abre desaparece (la maquinaria queda inerte). Ponerlo en False antes de publicar.
+DEV_THEME_EDITOR = True
+
+# Colores editables, en orden, con su etiqueta legible (para el editor). Son todas
+# las claves de una paleta: si se agrega una clave nueva a los dicts de arriba, hay
+# que sumarla aquí para poder tocarla desde el editor.
+EDITABLE_COLORS: list[tuple[str, str]] = [
+    ("bg",            "Fondo"),
+    ("surface",       "Paneles y tarjetas"),
+    ("surface2",      "Panel secundario"),
+    ("border",        "Bordes"),
+    ("text",          "Texto"),
+    ("text_muted",    "Texto tenue"),
+    ("accent",        "Acento (tabs, FAB)"),
+    ("chord",         "Acorde"),
+    ("chord_bg",      "Fondo del acorde"),
+    ("verse_bg",      "Fondo de verso"),
+    ("chorus_bg",     "Fondo de coro"),
+    ("section_label", "Etiqueta de sección"),
+    ("danger",        "Peligro"),
+    ("beat_one",      "Metrónomo · golpe 1"),
+]
+
+# Nombre de la variable Python de cada paleta (para exportar un snippet pegable).
+_VAR_OF: dict[str, str] = {
+    "noche": "DARK", "oscuro": "OSCURO", "medianoche": "MIDNIGHT",
+    "alba": "DAWN", "scratch": "SCRATCH",
 }
 
 # Logos de la marca (en assets/). OJO con los nombres: «claro»/«oscuro» describen
@@ -145,6 +187,82 @@ def set_theme(name: str) -> None:
 def active_theme() -> str:
     """Nombre del tema activo (clave de ``PALETTES``)."""
     return _active
+
+
+# --- Utilidades de color ------------------------------------------------------
+def hex_to_rgb(value: str) -> tuple[int, int, int]:
+    """``#rrggbb`` → (r, g, b). Tolera hex sin ``#`` o con alfa (usa los 6 primeros);
+    ante algo inválido devuelve negro en vez de reventar."""
+    h = value.lstrip("#")[:6].ljust(6, "0")
+    try:
+        return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    except ValueError:
+        return 0, 0, 0
+
+
+def rgb_to_hex(r: int, g: int, b: int) -> str:
+    return "#%02x%02x%02x" % (int(r), int(g), int(b))
+
+
+# --- Editor de temas (solo desarrollo) ---------------------------------------
+def set_active_color(key: str, value: str) -> None:
+    """Cambia un color del tema ACTIVO en vivo: lo escribe tanto en ``THEME`` (lo que
+    pinta la app ahora) como en su paleta de origen (para que persista y se exporte)."""
+    if key not in THEME:
+        return
+    THEME[key] = value
+    PALETTES[_active][key] = value
+
+
+def reset_palette(name: str) -> None:
+    """Devuelve una paleta a sus valores de fábrica (los definidos en este archivo)."""
+    original = _ORIGINALS.get(name)
+    if original is None:
+        return
+    PALETTES[name].clear()
+    PALETTES[name].update(original)
+    if name == _active:
+        THEME.clear()
+        THEME.update(PALETTES[name])
+
+
+def export_palettes() -> dict[str, dict[str, str]]:
+    """Foto serializable de todas las paletas (para guardar en preferencias)."""
+    return {name: dict(pal) for name, pal in PALETTES.items()}
+
+
+def apply_overrides(data: dict) -> None:
+    """Aplica ajustes guardados (de ``export_palettes``) sobre las paletas. Tolerante:
+    ignora nombres/claves que ya no existen. Refresca el tema activo si cambió."""
+    if not isinstance(data, dict):
+        return
+    for name, palette in data.items():
+        if name in PALETTES and isinstance(palette, dict):
+            for k, v in palette.items():
+                if k in PALETTES[name] and isinstance(v, str):
+                    PALETTES[name][k] = v
+    THEME.clear()
+    THEME.update(PALETTES[_active])
+
+
+def palette_source_snippet() -> str:
+    """Las paletas como código Python pegable en este archivo (bloques ``VAR = {…}``)."""
+    lineas: list[str] = ["# Paletas exportadas desde el editor de temas.", ""]
+    width = max(len(k) for k, _ in EDITABLE_COLORS) + 2
+    for name in PALETTES:
+        lineas.append(f"{_VAR_OF.get(name, name.upper())}: dict[str, str] = {{")
+        for key, label in EDITABLE_COLORS:
+            clave = f'"{key}":'.ljust(width + 3)
+            lineas.append(f'    {clave} "{PALETTES[name][key]}",   # {label}')
+        lineas.append("}")
+        lineas.append("")
+    return "\n".join(lineas)
+
+
+# Copia intacta de cada paleta al importar el módulo: es el "de fábrica" al que vuelve
+# ``reset_palette``. Se toma ANTES de aplicar cualquier ajuste guardado.
+_ORIGINALS: dict[str, dict[str, str]] = {name: dict(pal)
+                                         for name, pal in PALETTES.items()}
 
 
 def is_dark() -> bool:

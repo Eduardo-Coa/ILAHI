@@ -450,7 +450,8 @@ def _filled_chord_line(tokens: list[str], position: int,
     return line
 
 
-def parse_lyrics(text: str, title: str = "Sin título") -> Song:
+def parse_lyrics(text: str, title: str = "Sin título",
+                 detect_chords: bool = True) -> Song:
     """
     Construye una Song a partir del texto pegado.
 
@@ -463,9 +464,14 @@ def parse_lyrics(text: str, title: str = "Sin título") -> Song:
     correspondiente. Una línea de acordes sin letra debajo se trata como pasaje
     instrumental (línea de casillas). Cuando no hay acordes en el texto, cada
     sección arranca con una línea de casillas vacías para llenar a mano.
+
+    Con ``detect_chords=False`` NO se interpretan las líneas de acordes: todo el
+    texto se toma como letra (una línea que parezca acordes queda como letra literal).
+    Es el interruptor «Detectar acordes al pegar» de Ajustes; útil cuando la detección
+    se equivoca o se pegan solo versos.
     """
     raw_lines = text.split("\n")
-    has_chords = any(
+    has_chords = detect_chords and any(
         detect_header(rl) is None and is_chord_line_text(rl)
         for rl in raw_lines
     )

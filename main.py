@@ -12,6 +12,7 @@ Correr en escritorio:   flet run main.py
 """
 
 from __future__ import annotations
+from datetime import datetime
 from pathlib import Path
 import flet as ft
 
@@ -26,6 +27,7 @@ from views.setlist_view import build_setlists, SetlistDetailScreen, SongPickerSc
 from views.stage_view import StageScreen, PresentScreen
 from views.edit_view import NewSongScreen, EditSongScreen, EditLyricsScreen
 from views.settings_view import SettingsScreen
+from views.theme_editor import ThemeEditorScreen
 from views.main_shell import MainShell, HOME_INDEX
 from views.widgets import show_toast
 from utils.prefs import get_pref, set_pref
@@ -59,6 +61,11 @@ def bootstrap_db() -> Database:
     return db
 
 
+# Extensión de la copia de seguridad COMPLETA (SQLite): distinta de la del cancionero
+# (.hymnchords, solo canciones) para no confundir un backup con un cancionero.
+BACKUP_EXTENSION = ".hymnbak"
+
+
 def _ensure_ext(path: str) -> str:
     """Garantiza que la ruta termine en .hymnchords."""
     return path if path.lower().endswith(SONG_FILE_EXTENSION) else path + SONG_FILE_EXTENSION
@@ -73,6 +80,9 @@ def main(page: ft.Page) -> None:
     saved_theme = get_pref("theme", theme.DEFAULT_THEME)
     if saved_theme in theme.PALETTES:
         theme.set_theme(saved_theme)
+    # Ajustes de color hechos con el editor de temas (solo desarrollo): se aplican
+    # sobre las paletas ya activas. Tolerante a claves viejas (apply_overrides).
+    theme.apply_overrides(get_pref("theme_overrides"))
 
     # Tamaño del texto de la canción, también guardado. Se valida al leerlo: un
     # archivo de preferencias editado a mano o de una versión vieja no debe dejar
@@ -87,6 +97,17 @@ def main(page: ft.Page) -> None:
         nonlocal stage_size
         stage_size = size
         set_pref("stage_size", size)
+
+    # «Detectar acordes al pegar» (Ajustes): si está apagado, al pegar letra nueva no se
+    # interpretan las líneas de acordes. Por defecto encendido.
+    detect_chords = get_pref("detect_chords", True)
+    if not isinstance(detect_chords, bool):
+        detect_chords = True
+
+    def save_detect_chords(value: bool) -> None:
+        nonlocal detect_chords
+        detect_chords = bool(value)
+        set_pref("detect_chords", detect_chords)
 
     def _apply_page_theme() -> None:
         """Colores a nivel de página: fondo, modo, y un ColorScheme mínimo para
@@ -109,6 +130,35 @@ def main(page: ft.Page) -> None:
         set_pref("theme", name)
         _apply_page_theme()
         go_settings()
+
+    # -- Editor de temas en vivo (solo desarrollo; ver theme.DEV_THEME_EDITOR) ----
+    def persist_theme_state() -> None:
+        """Guarda qué paleta se edita y los colores de TODAS las paletas, para que el
+        trabajo del editor sobreviva a cerrar la app."""
+        set_pref("theme", theme.active_theme())
+        set_pref("theme_overrides", theme.export_palettes())
+
+    async def export_palette() -> str:
+        """Vuelca las paletas como código pegable en ``theme.py``, a un archivo elegido
+        (en el teléfono, Descargas). Devuelve el mensaje de estado."""
+        data = theme.palette_source_snippet().encode("utf-8")
+        path = await file_picker.save_file(
+            dialog_title="Exportar paletas", file_name="theme_palettes.py",
+            allowed_extensions=["py", "txt"], src_bytes=data)
+        if not path:
+            return "Exportación cancelada"
+        if not (page.web or page.platform.is_mobile()):
+            try:
+                Path(path).write_bytes(data)
+            except OSError as ex:
+                return f"✗ No se pudo guardar: {ex}"
+        return "✓ Paletas exportadas a Descargas"
+
+    def go_theme_editor() -> None:
+        editor = ThemeEditorScreen(
+            page, on_back=go_settings, refresh_page=_apply_page_theme,
+            persist=persist_theme_state, export=export_palette)
+        show(editor.build(), on_back=go_settings)
 
     # Solo en escritorio (`flet run`): abrir con tamaño de teléfono para simular la
     # pantalla. En Android/iOS se ignora (la app va a pantalla completa).
@@ -237,6 +287,101 @@ def main(page: ft.Page) -> None:
         go_home(status=await export_song_fn(db.load_song(song_id)))
 
     # ------------------------------------------------------------------
+    # Copia de seguridad completa (Ajustes › Datos): toda la base en un archivo
+    # ``.hymnbak`` (SQLite). Distinto del cancionero ``.hymnchords`, que solo lleva
+    # canciones: el backup incluye también listas y favoritos, y restaurar REEMPLAZA.
+    # ------------------------------------------------------------------
+    async def do_export_backup() -> None:
+        """Exporta toda la base (canciones + listas + favoritos) a un archivo elegido."""
+        try:
+            data = db.export_bytes()
+        except Exception as ex:                       # snapshot fallido: nunca reventar
+            show_toast(page, f"✗ No se pudo preparar la copia: {ex}")
+            return
+        name = f"hymnchords-backup-{datetime.now():%Y%m%d-%H%M}{BACKUP_EXTENSION}"
+        try:
+            path = await file_picker.save_file(
+                dialog_title="Exportar copia de seguridad", file_name=name,
+                allowed_extensions=[BACKUP_EXTENSION.lstrip(".")], src_bytes=data)
+        except Exception as ex:
+            show_toast(page, f"✗ {ex}")
+            return
+        if not path:
+            show_toast(page, "Exportación cancelada")
+            return
+        if not (page.web or page.platform.is_mobile()):
+            try:
+                dest = path if path.lower().endswith(BACKUP_EXTENSION) \
+                    else path + BACKUP_EXTENSION
+                Path(dest).write_bytes(data)
+            except OSError as ex:
+                show_toast(page, f"✗ No se pudo guardar: {ex}")
+                return
+        show_toast(page, "✓ Copia de seguridad exportada")
+
+    def do_import_backup() -> None:
+        """Restaurar reemplaza TODO, así que primero se confirma."""
+        def confirmar(_e=None) -> None:
+            page.pop_dialog()
+            page.run_task(_run_import_backup)
+
+        dialog = ft.AlertDialog(
+            modal=True, shape=ft.RoundedRectangleBorder(radius=20),
+            bgcolor=theme.THEME["surface2"],
+            title=ft.Text("Restaurar copia", size=18, weight=ft.FontWeight.BOLD,
+                          color=theme.THEME["text"]),
+            content=ft.Text(
+                "Reemplaza TODAS tus canciones y listas por las del archivo. Se guarda "
+                "una copia de lo actual por si acaso.", size=14,
+                color=theme.THEME["text_muted"]),
+            actions=[
+                ft.TextButton("Cancelar", on_click=lambda _e: page.pop_dialog()),
+                ft.TextButton("Restaurar", on_click=confirmar),
+            ])
+        page.show_dialog(dialog)
+
+    async def _run_import_backup() -> None:
+        files = await file_picker.pick_files(
+            dialog_title="Restaurar copia de seguridad",
+            allowed_extensions=[BACKUP_EXTENSION.lstrip(".")], allow_multiple=False)
+        if not files:
+            return
+        try:
+            data = Path(files[0].path).read_bytes()
+            db.restore_bytes(data)
+        except ValueError as ex:                      # archivo no válido
+            show_toast(page, f"✗ {ex}")
+            return
+        except Exception as ex:
+            show_toast(page, f"✗ No se pudo restaurar: {ex}")
+            return
+        go_home(status="✓ Copia de seguridad restaurada")
+
+    def show_data_location() -> None:
+        """Cuadro informativo: dónde vive la base (carpeta privada de la app)."""
+        carpeta = str(db.db_path.parent)
+        dialog = ft.AlertDialog(
+            modal=False, shape=ft.RoundedRectangleBorder(radius=20),
+            bgcolor=theme.THEME["surface2"],
+            title=ft.Text("Ubicación de datos", size=18, weight=ft.FontWeight.BOLD,
+                          color=theme.THEME["text"]),
+            content=ft.Column(tight=True, spacing=10, controls=[
+                ft.Text("Tus canciones y listas se guardan en la carpeta privada de la "
+                        "app (sobrevive a actualizar, se borra al desinstalar):",
+                        size=13, color=theme.THEME["text_muted"]),
+                ft.Container(
+                    bgcolor=theme.THEME["surface"], border_radius=10, padding=10,
+                    border=ft.Border.all(1, theme.THEME["border"]),
+                    content=ft.Text(carpeta, size=12, color=theme.THEME["text"],
+                                    selectable=True, font_family=theme.FONT_MONO)),
+                ft.Text("Usa «Exportar copia de seguridad» para guardar un respaldo que "
+                        "puedas mover o compartir.", size=12,
+                        color=theme.THEME["text_muted"]),
+            ]),
+            actions=[ft.TextButton("Cerrar", on_click=lambda _e: page.pop_dialog())])
+        page.show_dialog(dialog)
+
+    # ------------------------------------------------------------------
     # Panel principal: shell con las 5 vistas (swipe + deslizamiento + barra fija).
     # Secuencia: Autores · Canciones · Favoritos · Listas · Ajustes. Las funciones
     # go_* siguen siendo los puntos de entrada (las pantallas hoja las usan para
@@ -308,7 +453,15 @@ def main(page: ft.Page) -> None:
                 on_tab=None, page=page, db=db, refresh=refresh_shell,
                 embedded=True, external_search=True, query=query)
         return SettingsScreen(              # Ajustes
-            page, db=db, on_tab=None, on_theme_change=change_theme, embedded=True).build()
+            page, db=db, on_tab=None, on_theme_change=change_theme,
+            on_open_theme_editor=go_theme_editor,
+            stage_size=stage_size, on_size_change=save_stage_size,
+            refresh_page=_apply_page_theme, persist_theme=persist_theme_state,
+            detect_chords=detect_chords, on_detect_chords_change=save_detect_chords,
+            on_export_backup=lambda: page.run_task(do_export_backup),
+            on_import_backup=do_import_backup,
+            on_show_data_location=show_data_location,
+            embedded=True).build()
 
     def search_hint(i: int) -> str | None:
         """Placeholder del buscador fijo por vista (None solo en Ajustes)."""
@@ -370,7 +523,8 @@ def main(page: ft.Page) -> None:
         return msg or f"✓ Exportadas {len(songs)} canciones de «{etiqueta}»"
 
     def go_new_song() -> None:
-        show(NewSongScreen(db, on_created=go_edit_song, on_back=go_home).build(),
+        show(NewSongScreen(db, on_created=go_edit_song, on_back=go_home,
+                           detect_chords=detect_chords).build(),
              on_back=go_home)
 
     def go_edit_song(song_id: int, on_done=None) -> None:

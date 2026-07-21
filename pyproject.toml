@@ -16,3 +16,21 @@ org = "com.eduardocoa"
 product = "Ilahi"
 company = "Ilahi"
 copyright = "Copyright (C) 2026 Eduardo Coa"
+
+# Pantalla de arranque (splash): fondo NEGRO con el logo del modo oscuro (cream sobre
+# negro). La imagen sale de assets/splash.png y splash_dark.png (copias de
+# Ilahi-claro.png, RGBA transparente). Sin esta config, Flet usaría el ícono sobre un
+# fondo claro por defecto. icon_bgcolor negrea también el splash breve de Android 12+.
+[tool.flet.splash]
+color = "#000000"
+dark_color = "#000000"
+icon_bgcolor = "#000000"
+icon_dark_bgcolor = "#000000"
+
+# Plantilla de build PROPIA (copia de la de Flet 0.85.3 en flet_template/), con un
+# único cambio: el «boot screen» (BlankScreen, la pantalla que se ve mientras arranca
+# el motor de Python) va en NEGRO en vez del gris por defecto de Material, para que el
+# arranque no tenga un destello gris. OJO: si se sube la versión de Flet, hay que
+# re-sincronizar esta copia con la plantilla nueva (ver flet_template/README).
+[tool.flet.template]
+url = "flet_template/build"

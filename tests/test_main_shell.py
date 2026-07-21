@@ -89,6 +89,18 @@ def test_tocar_una_pestana_va_a_su_vista():
     shell, _ = _shell(index=1)
     shell._on_tab("setlists")            # → índice 3
     assert shell.index == 3
+    # Regresión: tocar la pestaña debe MOVER el PageView, no solo el resaltado. La
+    # navegación por código va por selected_index (go_to_page no movía la vista).
+    assert shell._pv.selected_index == 3
+
+
+def test_el_arrastre_sincroniza_el_selected_index_del_pageview():
+    """Regresión: el arrastre cambia la página sin pasar por selected_index; si el
+    modelo queda desfasado, un toque posterior a esa misma página no navegaría."""
+    shell, _ = _shell(index=1)
+    shell._on_page_change(_Swipe(2))     # arrastre nativo hasta Favoritos
+    assert shell.index == 2
+    assert shell._pv.selected_index == 2
 
 
 def test_ir_a_la_misma_vista_no_hace_nada():

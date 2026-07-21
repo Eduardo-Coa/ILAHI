@@ -264,6 +264,17 @@ def test_dos_lineas_de_acordes_bajo_encabezado_son_casillas():
     assert len(lyric) == 1
 
 
+def test_detectar_acordes_apagado_toma_todo_como_letra():
+    """Con ``detect_chords=False`` una línea de acordes NO se interpreta: ninguna sílaba
+    queda con acorde (el interruptor «Detectar acordes al pegar» de Ajustes)."""
+    texto = "G       C\nCristo vive hoy"
+    con = parse_lyrics(texto)                        # por defecto detecta
+    assert any(s.chord for l in con.sections[0].lines for s in l.syllables)
+    sin = parse_lyrics(texto, detect_chords=False)   # apagado: todo es letra
+    assert not any(s.chord for sec in sin.sections
+                   for l in sec.lines for s in l.syllables)
+
+
 def test_prepend_intro_no_duplica_si_ya_empieza_con_introduccion():
     song = parse_lyrics("G - Bm - A - D - A\n\n[Estrofa]\nletra")
     n_antes = len(song.sections)

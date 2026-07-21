@@ -49,9 +49,6 @@ INDEX_OF_TAB = {"library": 1, "favorites": 2, "setlists": 3, "settings": 4}
 # Índice de Canciones: el «hogar» del panel (a donde vuelve el «atrás» del sistema).
 HOME_INDEX = 1
 
-_SLIDE_MS = 240          # duración del deslizamiento al TOCAR (arrastrar usa la física
-                         # nativa de Flutter, que no depende de esto)
-
 
 class MainShell:
     """Sostiene las vistas principales; desliza entre ellas con swipe y barra fija."""
@@ -223,22 +220,21 @@ class MainShell:
         self.goto(INDEX_OF_TAB.get(key, self.index))
 
     def goto(self, new_index: int) -> None:
-        """Va a otra vista deslizando. Tocar una pestaña lejana igual desliza (lo hace
-        Flutter); si es la vista actual, no hace nada."""
+        """Va a otra vista (tocar una pestaña o el toggle). Si ya es la actual, no hace
+        nada.
+
+        Navega fijando ``selected_index`` + ``update()``, la forma documentada y
+        garantizada de mover el PageView por código: salta sin animación (el slide lo
+        da el gesto nativo al arrastrar). NO se usa ``go_to_page``: en esta versión de
+        Flet no movía la vista al tocar la pestaña. Además, entre pestañas no contiguas
+        (p. ej. 1→4) un salto se ve más limpio que deslizar por las del medio."""
         n = max(0, min(len(TAB_OF) - 1, new_index))
         if n == self.index:
             return
         self._ensure_page(n)                 # que esté armada antes de mostrarla
-        self._commit(n)                      # el chrome responde YA, sin esperar
-        pv = self._pv
-
-        async def _run() -> None:
-            try:
-                await pv.go_to_page(n, _SLIDE_MS, ft.AnimationCurve.EASE_IN_OUT)
-            except Exception:
-                pass                         # aún no montado: el índice ya quedó bien
-
-        self.page.run_task(_run)
+        self._commit(n)                      # el chrome responde YA
+        self._pv.selected_index = n
+        self._safe_update(self._pv)
 
     def _page_index(self, e) -> int:
         """Índice al que quedó el PageView, según el evento (o el actual si no se sabe)."""
@@ -256,6 +252,10 @@ class MainShell:
         """Llega DESPUÉS de que el arrastre se acomodó en otra vista. Es lo único que
         Python escucha del gesto: el deslizamiento en sí corrió entero en Flutter."""
         n = max(0, min(len(TAB_OF) - 1, self._page_index(e)))
+        # Sincroniza el modelo con la página real: el arrastre la cambió sin pasar por
+        # ``selected_index``, y si queda desfasado, un toque posterior a ESA misma
+        # página no se detectaría como cambio y no navegaría.
+        self._pv.selected_index = n
         if n != self.index:
             self._commit(n)
 

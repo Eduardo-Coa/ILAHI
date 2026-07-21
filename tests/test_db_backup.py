@@ -67,6 +67,71 @@ def test_delete_song_dispara_backup(tmp_path):
     db.close()
 
 
+def test_export_bytes_es_una_copia_restaurable(tmp_path):
+    """``export_bytes`` produce un snapshot que otra base puede abrir y leer."""
+    db = Database(DBConfig(path=tmp_path / "t.db"))
+    db.init_schema()
+    sid = db.save_song(_song("Respaldada"))
+    data = db.export_bytes()
+    db.close()
+
+    assert data.startswith(b"SQLite format 3\x00")
+    restaurada = tmp_path / "copia.db"
+    restaurada.write_bytes(data)
+    otra = Database(DBConfig(path=restaurada))
+    assert otra.load_song(sid).title == "Respaldada"
+    otra.close()
+
+
+def test_is_valid_backup_distingue_copias_de_la_app(tmp_path):
+    db = Database(DBConfig(path=tmp_path / "t.db"))
+    db.init_schema()
+    db.save_song(_song())
+    buena = db.export_bytes()
+    db.close()
+
+    assert Database.is_valid_backup(buena) is True
+    assert Database.is_valid_backup(b"esto no es sqlite") is False
+    # Un SQLite cualquiera (sin las tablas de la app) tampoco vale.
+    import sqlite3
+    otra = tmp_path / "ajena.db"
+    con = sqlite3.connect(str(otra)); con.execute("CREATE TABLE x (a)"); con.commit(); con.close()
+    assert Database.is_valid_backup(otra.read_bytes()) is False
+
+
+def test_restore_reemplaza_datos_y_respalda_lo_anterior(tmp_path):
+    """Restaurar cambia el contenido por el del backup y deja una copia de lo previo."""
+    db = Database(DBConfig(path=tmp_path / "t.db"))
+    db.init_schema()
+    db.save_song(_song("Original"))
+    # Backup de OTRA base con una canción distinta.
+    otra = Database(DBConfig(path=tmp_path / "fuente.db"))
+    otra.init_schema()
+    nuevo_id = otra.save_song(_song("Del backup"))
+    data = otra.export_bytes()
+    otra.close()
+
+    db.restore_bytes(data)
+    titulos = [s["title"] for s in db.list_songs()]
+    assert titulos == ["Del backup"]                 # reemplazó el contenido
+    assert db.load_song(nuevo_id).title == "Del backup"
+    assert len(_backups(tmp_path / "t.db")) == 1      # respaldó lo que había (pre-restore)
+    db.close()
+
+
+def test_restore_rechaza_un_archivo_invalido(tmp_path):
+    db = Database(DBConfig(path=tmp_path / "t.db"))
+    db.init_schema()
+    db.save_song(_song("Intacta"))
+    try:
+        db.restore_bytes(b"basura, no es una copia")
+        assert False, "debió lanzar ValueError"
+    except ValueError:
+        pass
+    assert [s["title"] for s in db.list_songs()] == ["Intacta"]   # nada cambió
+    db.close()
+
+
 def test_setup_logging_idempotente(tmp_path):
     logger = setup_logging(log_dir=tmp_path)
     count1 = sum(isinstance(h, RotatingFileHandler) for h in logger.handlers)
