@@ -7,7 +7,8 @@ mismos botones (volver, editar) y el mismo título centrado.
 from __future__ import annotations
 from typing import Callable
 import asyncio
-import flet as ft
+import os
+import flet as ft  # noqa: F401  (usado en anotaciones y controles)
 
 from models.song import Syllable
 import theme
@@ -17,13 +18,61 @@ import theme
 # elemento y no se puede llegar a tocarlo. Cubre la altura del botón más su margen.
 FAB_CLEARANCE = 96
 
+# Padding de las dos caras de una fila de lista: la normal y la de «¿Eliminar?», que
+# comparten Container (ver fill_list_card / fill_confirm_card). La pregunta lleva más
+# aire para que respire.
+_LIST_CARD_PADDING = ft.Padding.symmetric(horizontal=4, vertical=6)
+_CONFIRM_CARD_PADDING = ft.Padding.symmetric(horizontal=16, vertical=10)
 
-def _safe_update(control) -> None:
-    """Repinta un control; ignora el caso «aún no está en la página»."""
+# Alto FIJO de una fila de canción, y lo que ocupa en total contando el margen
+# vertical del margin (5 arriba + 5 abajo). Es fijo a propósito: ``WindowedList``
+# traduce posición de scroll ↔ índice de canción con esta cuenta, y solo sale exacta
+# si todas las filas miden lo mismo. Los 72 px dejan holgura sobre las tres líneas
+# (título 16, autor 12, ritmo 11) incluso con la letra del sistema agrandada.
+SONG_ROW_HEIGHT = 72
+SONG_ROW_EXTENT = SONG_ROW_HEIGHT + 10
+
+
+# Diagnóstico de la lista: si ILAHI_DEBUG_LIST apunta a un archivo, la ventana
+# deslizante deja ahí su rastro (posición, ventana calculada, alto declarado por
+# Flutter, y cualquier repintado que falle). Sin la variable no hace absolutamente
+# nada, así que no cuesta dejarlo puesto.
+#
+# Se conserva porque fue lo único que destrabó el bug de la lista en negro: la app no
+# escribe a logcat y `_safe_update` se traga los errores, así que sin esto el
+# diagnóstico es a ciegas. Para usarlo:
+#     ILAHI_DEBUG_LIST=/ruta/lista.log flet run main.py
+_DEBUG_LIST = os.environ.get("ILAHI_DEBUG_LIST")
+
+
+def _dbg(msg: str) -> None:
+    if not _DEBUG_LIST:
+        return
     try:
-        control.update()
+        with open(_DEBUG_LIST, "a", encoding="utf-8") as f:
+            f.write(msg + "\n")
     except Exception:
         pass
+
+
+def _esta_en_pagina(control) -> str:
+    """¿El control está adjunto a la página? Ojo: ``.page`` LANZA si no lo está, no
+    devuelve None, así que hay que envolverlo."""
+    try:
+        return "sí" if control.page else "no"
+    except Exception:
+        return "NO (suelta)"
+
+
+def _safe_update(control) -> None:
+    """Repinta un control; ignora el caso «aún no está en la página».
+
+    OJO: se traga TODA excepción, así que un fallo aquí es invisible. Con
+    ILAHI_DEBUG_LIST puesto, al menos queda registrado."""
+    try:
+        control.update()
+    except Exception as ex:
+        _dbg(f"    !! update falló: {type(ex).__name__}: {ex}")
 
 
 def show_toast(page, text: str, seconds: float = 3.0) -> None:
@@ -312,13 +361,33 @@ def confirm_row_card(content: ft.Control, key=None) -> ft.Container:
     Mismo fondo y esquinas que ``list_row_card``, con más padding para que respire la
     pregunta. El CONTENIDO lo arma cada vista: la de canciones lo pone en fila y la de
     autores en columna (la pregunta es más larga)."""
-    return ft.Container(
+    card = ft.Container(
         key=key,
         bgcolor=theme.THEME["surface"], border_radius=14,
-        padding=ft.Padding.symmetric(horizontal=16, vertical=10),
         margin=ft.Margin.symmetric(horizontal=12, vertical=5),
-        content=content,
     )
+    fill_confirm_card(card, content)
+    return card
+
+
+def fill_list_card(card: ft.Container, controls: list[ft.Control]) -> None:
+    """Deja ``card`` como una fila normal de lista, EN EL SITIO.
+
+    Existe para poder alternar entre fila normal y «¿Eliminar?» sin sustituir el
+    Container dentro del ListView: Flet repinta con fiabilidad un cambio de
+    propiedades, pero no un hijo reemplazado dentro de una lista larga (con la lista
+    ya scrolleada, el cambio simplemente no se veía y no se podía confirmar el
+    borrado). Rearmar la lista entera para lograrlo cuesta miles de controles.
+    """
+    card.padding = _LIST_CARD_PADDING
+    card.content = ft.Row(vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=2,
+                          controls=controls)
+
+
+def fill_confirm_card(card: ft.Container, content: ft.Control) -> None:
+    """Deja ``card`` como la fila «¿Eliminar…?», EN EL SITIO (ver ``fill_list_card``)."""
+    card.padding = _CONFIRM_CARD_PADDING
+    card.content = content
 
 
 def stepper_row(minus_label: str, on_minus, center: ft.Control,
@@ -333,18 +402,206 @@ def stepper_row(minus_label: str, on_minus, center: ft.Control,
     ])
 
 
-def list_row_card(controls: list[ft.Control], key=None) -> ft.Container:
+class WindowedList:
+    """Mantiene vivas SOLO las filas cercanas a lo que se está viendo.
+
+    El problema de fondo: en Flet cada control vive en Python y viaja al cliente, así
+    que el costo NO depende de cuántas filas se ven sino de cuántas existen. Una
+    tarjeta de canción son ~15 controles; con 600 himnos armados son 9.000, y a partir
+    de ahí TODA la app se arrastra (tocar una fila, abrir un menú, repintar). Cargar
+    de a tandas no lo resuelve: solo retrasa el momento en que se juntan las 9.000.
+
+    Aquí en cambio se arma una VENTANA (lo visible más un margen arriba y abajo) y se
+    sueltan las filas que quedan lejos; si se vuelve a subir, se rearman. Así el
+    número de controles vivos es constante —unas 50 filas— dé igual si la biblioteca
+    tiene 100 o 2.000 canciones.
+
+    Para que la barra de scroll no salte, el hueco de las filas no armadas lo ocupan
+    dos espaciadores (arriba y abajo) de la altura exacta que les corresponde. Por eso
+    las filas deben tener ``row_height`` FIJO: es lo que hace que la cuenta de
+    posición ↔ índice sea exacta.
+
+    Solo se usan operaciones que Flet repinta de forma fiable: mutar propiedades (la
+    altura de los espaciadores), y agregar o quitar hijos. Nunca sustituir un hijo en
+    su sitio, que es justamente lo que Flet no repinta bien en una lista larga.
+
+    IMPORTANTE — el hueco de las filas no armadas se reserva con el ``padding`` del
+    ListView, NO con controles espaciadores. Con espaciadores, el de abajo funcionaba
+    pero el de arriba se quedaba clavado en 0 por más que se le asignara el alto en
+    cada movimiento; medido en el teléfono: el alto total declarado se desmoronaba de
+    51.118 a 27.092 px según se bajaba, las filas se dibujaban siempre al principio de
+    todo, y de ahí para abajo solo se veía negro. El padding es una propiedad del
+    scroll mismo y siempre cuenta: con él, el alto declarado se queda fijo (verificado:
+    52.512 px de punta a punta del himnario).
+
+    El ListView lleva ``build_controls_on_demand=False``. La pereza de Flutter no hace
+    falta —esta clase ya se encarga de que haya unas 100 filas, no las 647— y así el
+    alto se calcula sobre hijos reales. (Ojo: durante el diagnóstico se sospechó que la
+    estimación perezosa era LA causa; no lo era, cambiarla sola no movió un número.)
+
+    ``overscan`` es cuántas filas de más se arman a cada lado de lo visible, como
+    colchón contra el parpadeo en los envíones. Con 15 el scroll es fluido y solo
+    quedan saltitos ocasionales en flings muy bruscos; subirlo reduce esos saltos pero
+    encarece cada movimiento de la ventana, así que se dejó en 15 (probado en el
+    teléfono como el mejor equilibrio).
+    """
+
+    def __init__(self, list_view: ft.ListView, make_tile: Callable,
+                 row_height: float, overscan: int = 15,
+                 page: ft.Page | None = None, pad_bottom: float = 0.0) -> None:
+        self._lv = list_view
+        self._make = make_tile
+        self._row_h = float(row_height)
+        self._overscan = overscan      # filas de más que se arman a cada lado
+        self._items: list = []
+        self._empty: ft.Control | None = None
+        self._tiles: dict[int, ft.Control] = {}   # índice -> tarjeta viva
+        self._start = 0
+        self._end = 0
+        self._pixels = 0.0
+        self._pad_bottom = pad_bottom   # aire fijo del final (p. ej. el ＋ flotante)
+        # Alto de la ventana visible. Antes del primer evento de scroll no lo sabemos,
+        # así que se parte del alto de la pantalla (o de una estimación holgada).
+        self._viewport = float(getattr(page, "height", None) or 0) or 900.0
+
+    # -- estado --------------------------------------------------------------
+
+    @property
+    def count(self) -> int:
+        """Cuántos elementos hay en total (armados o no)."""
+        return len(self._items)
+
+    @property
+    def live(self) -> int:
+        """Cuántas filas están armadas ahora mismo (debe quedarse acotado)."""
+        return len(self._tiles)
+
+    def tile_of(self, match: Callable) -> ft.Control | None:
+        """La tarjeta del elemento que cumpla ``match``, si está armada."""
+        i = self._index_of(match)
+        return self._tiles.get(i) if i is not None else None
+
+    def item_of(self, match: Callable):
+        """El elemento (los datos, no la tarjeta) que cumpla ``match``."""
+        i = self._index_of(match)
+        return self._items[i] if i is not None else None
+
+    # -- carga ---------------------------------------------------------------
+
+    def reset(self, items: list, empty: ft.Control | None = None,
+              keep_position: bool = False) -> None:
+        """Rearma la lista con ``items``. Sin elementos, muestra ``empty`` (si hay).
+
+        ``keep_position`` conserva el punto de scroll (para acciones en el lugar, como
+        borrar una canción); con False se vuelve al principio (búsqueda nueva).
+        """
+        self._items = list(items)
+        self._empty = empty
+        self._tiles.clear()            # los índices cambiaron: nada se puede reusar
+        if not keep_position:
+            self._pixels = 0.0
+        if not self._items:
+            self._vaciar(empty)
+            return
+        self._apply(*self._window_for(self._pixels))
+        _dbg(f"RESET n={len(self._items)} vp={self._viewport:.0f} "
+             f"fila={self._row_h:.0f} ventana=[{self._start},{self._end}) "
+             f"vivas={self.live} pad={self._lv.padding}")
+
+    def drop(self, match: Callable) -> bool:
+        """Saca de la lista el primer elemento que cumpla ``match``, con su tarjeta."""
+        i = self._index_of(match)
+        if i is None:
+            return False
+        del self._items[i]
+        self._tiles.clear()            # los índices de ahí abajo se corrieron
+        if not self._items:
+            self._vaciar(self._empty)
+            return True
+        self._apply(*self._window_for(self._pixels))
+        return True
+
+    def _vaciar(self, empty: ft.Control | None) -> None:
+        """Lista sin elementos: sin huecos que reservar, solo el mensaje."""
+        self._start = self._end = 0
+        self._tiles.clear()
+        self._lv.padding = ft.Padding.only(bottom=self._pad_bottom)
+        self._lv.controls = [empty] if empty is not None else []
+
+    # -- ventana -------------------------------------------------------------
+
+    def _index_of(self, match: Callable) -> int | None:
+        for i, item in enumerate(self._items):
+            if match(item):
+                return i
+        return None
+
+    def _window_for(self, pixels: float) -> tuple[int, int]:
+        """Qué rango de índices debe estar armado para una posición de scroll."""
+        n = len(self._items)
+        visibles = int(self._viewport / self._row_h) + 2
+        primero = int(max(0.0, pixels) / self._row_h)
+        inicio = max(0, primero - self._overscan)
+        fin = min(n, primero + visibles + self._overscan)
+        return inicio, fin
+
+    def _apply(self, inicio: int, fin: int) -> None:
+        """Deja armadas exactamente las filas [inicio, fin) y ajusta los espaciadores.
+
+        Las filas que siguen dentro de la ventana se REUSAN (mismo objeto), así que un
+        desplazamiento normal solo agrega y quita unas pocas.
+        """
+        n = len(self._items)
+        vivas = {i: (self._tiles.get(i) or self._make(self._items[i]))
+                 for i in range(inicio, fin)}
+        self._tiles = vivas
+        self._start, self._end = inicio, fin
+        # El hueco de las filas no armadas se reserva con el PADDING del propio
+        # ListView, no con controles espaciadores. Con espaciadores, el de arriba se
+        # quedaba en 0 por más que se le cambiara el alto: las filas se dibujaban
+        # siempre al principio del todo mientras la pantalla estaba 25.000 px más
+        # abajo, y solo se veía negro. El padding, en cambio, es una propiedad del
+        # scroll y cuenta siempre para el alto total.
+        self._lv.padding = ft.Padding.only(
+            top=inicio * self._row_h,
+            bottom=max(0, n - fin) * self._row_h + self._pad_bottom)
+        self._lv.controls = [vivas[i] for i in range(inicio, fin)]
+
+    def on_scroll(self, e) -> None:
+        """Handler de ``ListView.on_scroll``: mueve la ventana con el dedo.
+
+        No acumula nada: la ventana se DEDUCE de la posición, así que un deslizamiento
+        rápido no puede dejar huecos ni ir juntando filas por el camino.
+        """
+        vp = getattr(e, "viewport_dimension", None)
+        if vp:
+            self._viewport = float(vp)
+        self._pixels = max(0.0, getattr(e, "pixels", None) or 0.0)
+        if not self._items:
+            return
+        inicio, fin = self._window_for(self._pixels)
+        if (inicio, fin) == (self._start, self._end):
+            return
+        self._apply(inicio, fin)
+        _safe_update(self._lv)
+
+
+
+def list_row_card(controls: list[ft.Control], key=None,
+                  height: float | None = None) -> ft.Container:
     """Tarjeta de UNA fila de lista (canción, autor, lista, ítem de lista). Unifica el
     fondo, las esquinas y el padding/margen para que todas las listas de la app se vean
-    iguales. La ``key`` estable evita que Flet reutilice controles al reordenar."""
-    return ft.Container(
-        key=key,
+    iguales. La ``key`` estable evita que Flet reutilice controles al reordenar.
+
+    ``height`` fija el alto de la fila; lo usan las listas con ventana deslizante
+    (``WindowedList``), que necesitan que todas midan igual para ubicar el scroll."""
+    card = ft.Container(
+        key=key, height=height,
         bgcolor=theme.THEME["surface"], border_radius=14,
-        padding=ft.Padding.symmetric(horizontal=4, vertical=6),
         margin=ft.Margin.symmetric(horizontal=12, vertical=5),
-        content=ft.Row(vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=2,
-                       controls=controls),
     )
+    fill_list_card(card, controls)
+    return card
 
 
 def sheet_dialog(content: ft.Control, title: str | None = None,

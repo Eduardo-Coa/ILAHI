@@ -53,6 +53,15 @@ class Database:
             self._conn.row_factory = sqlite3.Row
             # Necesario en SQLite para que actúen las FK ON DELETE CASCADE.
             self._conn.execute("PRAGMA foreign_keys = ON")
+            # WAL + synchronous=NORMAL: cada commit deja de esperar a que la memoria
+            # del teléfono confirme la escritura, que es lo que hacía sentir lentos
+            # los cambios chicos (marcar favorito). Sigue siendo seguro ante un cierre
+            # de la app; solo un corte de energía podría perder el último commit.
+            # Las copias de seguridad no se ven afectadas: export_bytes usa la API de
+            # backup de SQLite (no copia el archivo crudo) y restore_bytes ya borra
+            # los -wal/-shm sueltos antes de reemplazar la base.
+            self._conn.execute("PRAGMA journal_mode = WAL")
+            self._conn.execute("PRAGMA synchronous = NORMAL")
         return self._conn
 
     def close(self) -> None:
@@ -295,6 +304,15 @@ class Database:
         self._ensure_column(cur, "songs", "favorite", "INTEGER DEFAULT 0")
         self._ensure_column(cur, "songs", "original_key", "TEXT")
         self._ensure_column(cur, "songs", "bpm", "INTEGER")
+        # Índices de las claves foráneas. SQLite NO los crea solo, y sin ellos cargar
+        # UNA canción escanea las tablas hijas ENTERAS: el costo de abrir una canción
+        # crecía con el tamaño de la biblioteca (medido: 20 ms con 600 himnos, 100 ms
+        # con 2000; con índices es constante). Corren en cada arranque (IF NOT EXISTS),
+        # así una BD ya poblada se migra sola.
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_sections_song ON sections(song_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_lines_section ON `lines`(section_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_syllables_line ON syllables(line_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_chords_syllable ON chords(syllable_id)")
         conn.commit()
 
     def _ensure_column(self, cur: sqlite3.Cursor, table: str, column: str,
@@ -497,7 +515,12 @@ class Database:
         sql = "SELECT id, title, author, `key`, rhythm, favorite FROM songs"
         if where:
             sql += " WHERE " + " AND ".join(where)
-        sql += " ORDER BY favorite DESC, title"      # favoritos primero
+        # Orden alfabético puro. Los favoritos NO suben al tope a propósito: subirlos
+        # obligaba a reordenar (y por tanto a rearmar) la lista entera al marcar uno,
+        # que es carísimo con cientos de himnos, y además movía la canción de lugar
+        # justo cuando la estabas mirando. Para verlos juntos está la pestaña
+        # Favoritos, que es el camino directo.
+        sql += " ORDER BY title"
 
         conn = self._connect()
         cur = conn.cursor()

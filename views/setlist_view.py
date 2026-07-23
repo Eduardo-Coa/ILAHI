@@ -16,7 +16,8 @@ from models.transposer import transpose_chord, transpose_song
 from views.bottom_bar import build_bottom_bar
 from views.widgets import (centered_header, back_button, square_button, show_toast,
                            logo_header, _safe_update, key_badge, accent_fab,
-                           confirm_dialog, list_row_card, FAB_CLEARANCE)
+                           confirm_dialog, list_row_card, FAB_CLEARANCE, WindowedList,
+                           SONG_ROW_HEIGHT, SONG_ROW_EXTENT)
 from views.search_field import search_pill
 import theme
 
@@ -362,7 +363,13 @@ class SongPickerScreen:
         self._in_list = {it.song_id for it in db.load_setlist(setlist_id).items}
         self._artist_label = ft.Text("Todos los artistas", size=15, expand=True,
                                      no_wrap=True, color=theme.THEME["text"])
-        self._list = ft.ListView(expand=True, controls=[])
+        # Solo se mantienen vivas las filas cercanas a lo que se ve (WindowedList):
+        # armar el catálogo entero congelaba la pantalla al abrirla y en cada tecla.
+        self._list = ft.ListView(expand=True, controls=[], scroll_interval=50,
+                                 build_controls_on_demand=False)
+        self._filler = WindowedList(self._list, self._tile,
+                                    row_height=SONG_ROW_EXTENT, page=page)
+        self._list.on_scroll = self._filler.on_scroll
 
     def build(self) -> ft.Control:
         header = centered_header("Agregar canciones", left=back_button(self.on_back))
@@ -405,16 +412,15 @@ class SongPickerScreen:
         self._query = e.control.value or ""
         self._refill(update=True)
 
-    def _refill(self, update: bool = False) -> None:
+    def _refill(self, update: bool = False, keep_position: bool = False) -> None:
         filters = {"author": self._author} if self._author else None
         # Excluir las que ya están en la lista.
         songs = [s for s in self.db.list_songs(self._query, filters)
                  if s["id"] not in self._in_list]
-        if songs:
-            self._list.controls = [self._tile(s) for s in songs]
-        else:
-            self._list.controls = [ft.Container(padding=20, content=ft.Text(
-                "(no hay más canciones para agregar)", color=theme.THEME["text_muted"]))]
+        self._filler.reset(
+            songs, keep_position=keep_position,
+            empty=ft.Container(padding=20, content=ft.Text(
+                "(no hay más canciones para agregar)", color=theme.THEME["text_muted"])))
         if update:
             _safe_update(self._list)
 
@@ -434,7 +440,7 @@ class SongPickerScreen:
                          padding=ft.Padding.symmetric(horizontal=4, vertical=4),
                          content=info),
             self._add_badge(song),
-        ])
+        ], key=f"pick-{song['id']}", height=SONG_ROW_HEIGHT)
 
     def _add_badge(self, song: dict) -> ft.Control:
         """Botón ＋ con el mismo diseño del badge de tono (reemplaza «＋ Agregar»)."""
@@ -459,6 +465,9 @@ class SongPickerScreen:
             transpose=0, title=song["title"], key=song.get("key")))
         self.db.save_setlist(setlist)
         self._in_list.add(song["id"])     # ya no vuelve a aparecer como opción
-        self._refill(update=True)
+        # Solo sale esa fila: rearmar el catálogo entero por cada canción agregada
+        # costaba miles de controles hacia Flutter (ver WindowedList.drop).
+        self._filler.drop(lambda s: s["id"] == song["id"])
+        _safe_update(self._list)
         if self.page is not None:
             show_toast(self.page, f"✓ Agregada «{song['title']}»")

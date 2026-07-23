@@ -202,6 +202,16 @@ class MainShell:
         self._sync_search(self.index)
         self._rebuild_body()
 
+    def invalidate_others(self) -> None:
+        """Marca las OTRAS vistas para rehacerse, sin tocar la actual.
+
+        Para cambios que la vista actual ya reflejó por su cuenta pero que también
+        afectan a otra (marcar un favorito en Biblioteca cambia lo que debe mostrar
+        Favoritos, que es otra pantalla y está viva). Es solo apuntar en un conjunto:
+        no cuesta nada y no deshace la actualización puntual que ya se hizo.
+        """
+        self._dirty.update(i for i in self._built if i != self.index)
+
     def rebuild(self) -> None:
         """Reconstruye la vista actual en el sitio. Para refrescar tras un cambio de
         datos (p. ej. borrar una lista). Conserva el filtro tipeado.

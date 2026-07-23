@@ -402,6 +402,12 @@ def main(page: ft.Page) -> None:
         if shell_state["shell"] is not None:
             shell_state["shell"].goto(n)
 
+    def _invalidate_others() -> None:
+        """Un cambio de datos en la vista actual (favorito, borrado) deja obsoletas a
+        las demás: Biblioteca y Favoritos son pantallas distintas y viven a la vez."""
+        if shell_state["shell"] is not None:
+            shell_state["shell"].invalidate_others()
+
     def _songs_body(tab: str, query: str, author: str | None = None) -> ft.Control:
         """Cuerpo de una lista de canciones embebida (buscador fijo del shell)."""
         return SongsScreen(
@@ -411,7 +417,8 @@ def main(page: ft.Page) -> None:
             on_export_song=do_export_song, on_open_authors=lambda: _goto(0),
             on_open_settings=lambda: _goto(4), tab=tab, author=author,
             embedded=True, external_search=True, query=query,
-            on_clear_author=clear_author if author else None).build()
+            on_clear_author=clear_author if author else None,
+            on_data_changed=_invalidate_others).build()
 
     def build_main_page(i: int, query: str = "") -> ft.Control:
         """Cuerpo de la vista ``i`` filtrado por ``query`` (logo, toggle, buscador y

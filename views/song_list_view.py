@@ -17,8 +17,9 @@ from views.bottom_bar import build_bottom_bar, fill_bar
 from views.search_field import search_pill, filter_chip
 from views.widgets import (sheet_option as _sheet_option, show_toast,
                            segmented_toggle, logo_header, _safe_update, key_badge,
-                           accent_fab, sheet_dialog, list_row_card, confirm_row_card,
-                           FAB_CLEARANCE)
+                           accent_fab, sheet_dialog, list_row_card, fill_list_card,
+                           confirm_dialog, FAB_CLEARANCE, WindowedList,
+                           SONG_ROW_HEIGHT, SONG_ROW_EXTENT)
 from database.db import author_display
 
 
@@ -68,7 +69,8 @@ class SongsScreen:
                  status: str = "", tab: str = "library",
                  author: str | None = None, embedded: bool = False,
                  external_search: bool = False, query: str = "",
-                 on_clear_author: Callable[[], None] | None = None) -> None:
+                 on_clear_author: Callable[[], None] | None = None,
+                 on_data_changed: Callable[[], None] | None = None) -> None:
         self.page = page
         self.db = db
         self.on_open_song = on_open_song
@@ -91,12 +93,23 @@ class SongsScreen:
         # maneja el shell (vuelve a la lista de autores), no solo el refill interno.
         self.external_search = external_search
         self.on_clear_author = on_clear_author
+        # Aviso de que los datos cambiaron (favorito, borrado). Biblioteca y Favoritos
+        # son pantallas distintas y vivas a la vez: sin esto, marcar un favorito aquí
+        # no se veía allá hasta reiniciar la app.
+        self.on_data_changed = on_data_changed or (lambda: None)
         self._query = query
-        self._confirm_delete_id: int | None = None
         # El ＋ flotante del panel vive encima de la lista: se reserva aire abajo para
-        # que el último elemento se pueda desplazar por encima del botón.
-        self._list = ft.ListView(expand=True, controls=[],
-                                 padding=ft.Padding.only(bottom=FAB_CLEARANCE))
+        # que el último elemento se pueda desplazar por encima del botón. Solo se
+        # mantienen vivas las filas cercanas a lo que se ve (WindowedList): armarlas
+        # todas hace que la app entera se arrastre, sin importar cómo se carguen.
+        self._list = ft.ListView(expand=True, controls=[], scroll_interval=50,
+                                 build_controls_on_demand=False)
+        # El aire del ＋ flotante lo administra el filler: el padding de la lista es
+        # justamente donde reserva el hueco de las filas no armadas.
+        self._filler = WindowedList(self._list, self._song_tile,
+                                    row_height=SONG_ROW_EXTENT, page=page,
+                                    pad_bottom=FAB_CLEARANCE)
+        self._list.on_scroll = self._filler.on_scroll
         self._bar = ft.Row(spacing=0)
 
     # ------------------------------------------------------------------
@@ -189,7 +202,6 @@ class SongsScreen:
         if key == self._tab:
             return
         self._tab = key
-        self._confirm_delete_id = None
         self._set_status("")
         self._refill(update=True)
         fill_bar(self._bar, self._tab, self._select_tab)
@@ -201,7 +213,6 @@ class SongsScreen:
 
     def _on_query(self, e) -> None:
         self._query = e.control.value or ""
-        self._confirm_delete_id = None
         self._refill(update=True)
 
     def _empty_message(self) -> str:
@@ -211,17 +222,19 @@ class SongsScreen:
             return f"(«{author_display(self._author)}» no tiene canciones que coincidan)"
         return "(sin resultados)"
 
-    def _refill(self, update: bool = True) -> None:
+    def _refill(self, update: bool = True, keep_position: bool = False) -> None:
+        """Relee la base y rearma la ventana visible. ``keep_position`` conserva el
+        punto de scroll (acciones en el lugar, como borrar); una búsqueda o un cambio
+        de pestaña arrancan arriba."""
         filters = {"author": self._author} if self._author else None
-        songs = self.db.list_songs(self._query, filters)   # favoritos primero
+        songs = self.db.list_songs(self._query, filters)   # alfabético
         if self._tab == "favorites":
             songs = [s for s in songs if s["favorite"]]
-        if songs:
-            self._list.controls = [self._song_tile(s) for s in songs]
-        else:
-            self._list.controls = [ft.Container(
+        self._filler.reset(
+            songs, keep_position=keep_position,
+            empty=ft.Container(
                 key="empty", padding=20,
-                content=ft.Text(self._empty_message(), color=theme.THEME["text_muted"]))]
+                content=ft.Text(self._empty_message(), color=theme.THEME["text_muted"])))
         if update:
             _safe_update(self._list)
 
@@ -229,31 +242,49 @@ class SongsScreen:
     # Tarjeta de canción
     # ------------------------------------------------------------------
     def _song_tile(self, song: dict) -> ft.Control:
+        """Tarjeta de una canción, de alto fijo (lo exige la ventana deslizante).
+
+        Las piezas que hacen falta después (la estrella y su ítem de menú) se guardan
+        EN la propia tarjeta, no en diccionarios de la pantalla: al salir de la
+        ventana, la tarjeta se suelta y con ella todo lo suyo. Con diccionarios por id
+        quedarían retenidas y no se liberaría nada, que es justo lo que se busca.
+
+        La `key` estable evita que Flet reconcilie por posición y, al cambiar el largo
+        de la lista (p. ej. Biblioteca → Favoritos), reutilice controles de otra
+        canción arrastrando sus handlers.
+        """
         sid = song["id"]
-        if sid == self._confirm_delete_id:
-            return self._confirm_tile(song)
         fav = bool(song.get("favorite"))
-        # `key` estable: sin ella Flet reconcilia los hijos por posición y, al
-        # cambiar el largo de la lista (p. ej. Biblioteca → Favoritos), reutiliza
-        # controles de otra canción arrastrando sus handlers.
-        return list_row_card([
-            self._star(sid, fav),
+        card = list_row_card([], key=f"song-{sid}", height=SONG_ROW_HEIGHT)
+        estrella = self._star(sid, fav)
+        item_fav = self._fav_menu_item(sid, fav)
+        fill_list_card(card, [
+            estrella,
             ft.Container(
                 expand=True, ink=True, border_radius=10,
                 on_click=lambda _e: self.on_open_song(sid),
                 padding=ft.Padding.symmetric(horizontal=4, vertical=4),
                 content=self._info(song)),
             key_badge(song.get("key")),
-            self._menu(sid, fav),
-        ], key=f"song-{sid}")
+            self._menu(sid, item_fav),
+        ])
+        card.data = (estrella, item_fav)
+        return card
 
-    def _star(self, sid: int, fav: bool) -> ft.Control:
+
+    def _star(self, sid: int, fav: bool) -> ft.IconButton:
         """★ si es favorita, ♪ si no. Tocarla alterna el favorito."""
         return ft.IconButton(
             icon=ft.Icons.STAR if fav else ft.Icons.MUSIC_NOTE,
             icon_color=theme.THEME["accent"] if fav else theme.THEME["text_muted"],
             icon_size=22,
             tooltip="Quitar de favoritos" if fav else "Marcar favorito",
+            on_click=lambda _e: self._toggle_favorite(sid, not fav))
+
+    def _fav_menu_item(self, sid: int, fav: bool) -> ft.PopupMenuItem:
+        return ft.PopupMenuItem(
+            content="Quitar de favoritos" if fav else "Marcar favorito",
+            icon=ft.Icons.STAR_BORDER if fav else ft.Icons.STAR,
             on_click=lambda _e: self._toggle_favorite(sid, not fav))
 
     def _info(self, song: dict) -> ft.Control:
@@ -270,7 +301,7 @@ class SongsScreen:
             ], spacing=4, tight=True),
         ], spacing=1, tight=True)
 
-    def _menu(self, sid: int, fav: bool) -> ft.Control:
+    def _menu(self, sid: int, item_fav: ft.PopupMenuItem) -> ft.Control:
         return ft.PopupMenuButton(
             icon=ft.Icons.MORE_VERT, icon_color=theme.THEME["text_muted"],
             items=[
@@ -278,10 +309,7 @@ class SongsScreen:
                                  on_click=lambda _e: self.on_edit_song(sid)),
                 ft.PopupMenuItem(content="Exportar", icon=ft.Icons.UPLOAD,
                                  on_click=self._export_handler(sid)),
-                ft.PopupMenuItem(
-                    content="Quitar de favoritos" if fav else "Marcar favorito",
-                    icon=ft.Icons.STAR_BORDER if fav else ft.Icons.STAR,
-                    on_click=lambda _e: self._toggle_favorite(sid, not fav)),
+                item_fav,
                 ft.PopupMenuItem(content="Eliminar", icon=ft.Icons.DELETE,
                                  on_click=lambda _e: self._ask_delete(sid)),
             ])
@@ -292,39 +320,73 @@ class SongsScreen:
             await self.on_export_song(sid)
         return handler
 
-    def _confirm_tile(self, song: dict) -> ft.Control:
-        sid = song["id"]
-        return confirm_row_card(
-            ft.Row(
-                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                controls=[
-                    ft.Text(f"¿Eliminar «{song['title']}»?", size=14,
-                            color=theme.THEME["danger"], no_wrap=True, expand=True),
-                    ft.Row([
-                        ft.TextButton("Sí, eliminar", on_click=lambda _e: self._do_delete(sid)),
-                        ft.TextButton("No", on_click=lambda _e: self._cancel_delete()),
-                    ], tight=True),
-                ],
-            ),
-            key=f"confirm-{sid}")
-
     # ------------------------------------------------------------------
     # Acciones
     # ------------------------------------------------------------------
     def _toggle_favorite(self, sid: int, value: bool) -> None:
+        """Marca o desmarca, tocando SOLO esa fila.
+
+        Antes se rearmaba la lista entera para que los favoritos subieran al momento;
+        con la biblioteca ya scrolleada eran 9.000 controles nuevos hacia Flutter y el
+        toque tardaba más de 5 s en el teléfono. El reordenamiento ahora se aplica en
+        el próximo refresco natural (buscar, cambiar de pestaña, volver a entrar), que
+        de todos modos relee la base.
+        """
         self.db.set_favorite(sid, value)
-        self._refill(update=True)      # reordena: los favoritos suben
+        song = self._filler.item_of(lambda s: s["id"] == sid)
+        if song is not None:
+            song["favorite"] = 1 if value else 0
+        # Las otras vistas (Favoritos y Biblioteca son pantallas distintas) quedan
+        # desactualizadas: se rehacen al ir hacia ellas.
+        self.on_data_changed()
+        # En Favoritos, quitar la marca saca la canción de la lista.
+        if self._tab == "favorites" and not value:
+            self._filler.drop(lambda s: s["id"] == sid)
+            _safe_update(self._list)
+            return
+        card = self._filler.tile_of(lambda s: s["id"] == sid)
+        if card is None or not card.data:   # fuera de la ventana: nada que repintar
+            return
+        estrella, item = card.data
+        estrella.icon = ft.Icons.STAR if value else ft.Icons.MUSIC_NOTE
+        estrella.icon_color = (theme.THEME["accent"] if value
+                               else theme.THEME["text_muted"])
+        estrella.tooltip = item.content = ("Quitar de favoritos" if value
+                                           else "Marcar favorito")
+        item.icon = ft.Icons.STAR_BORDER if value else ft.Icons.STAR
+        estrella.on_click = item.on_click = (
+            lambda _e: self._toggle_favorite(sid, not value))
+        _safe_update(card)                  # ~15 controles en vez de miles
 
     def _ask_delete(self, sid: int) -> None:
-        self._confirm_delete_id = sid
-        self._refill(update=True)
+        """Pregunta antes de borrar, con el mismo cuadro que usan las listas.
 
-    def _cancel_delete(self) -> None:
-        self._confirm_delete_id = None
-        self._refill(update=True)
+        Antes la pregunta reemplazaba a la fila dentro de la lista. Con la lista
+        armada por tandas eso dejó de verse: Flet no repinta de forma fiable un hijo
+        sustituido (ni un contenido sustituido) dentro de un ListView largo, así que
+        la confirmación no aparecía y la canción no se podía borrar. El cuadro modal
+        no depende de repintar la lista y es lo que ya se usa para borrar listas.
+        """
+        song = self._filler.item_of(lambda s: s["id"] == sid) or {}
+        titulo = song.get("title", "")
+
+        def confirmar(_e=None) -> None:
+            self.page.pop_dialog()
+            self._do_delete(sid)
+
+        self.page.show_dialog(confirm_dialog(
+            "Eliminar canción",
+            ft.Text(f"¿Eliminar «{titulo}»? No se puede deshacer.",
+                    color=theme.THEME["text_muted"]),
+            actions=[
+                ft.TextButton("Cancelar", on_click=lambda _e: self.page.pop_dialog()),
+                ft.TextButton("Eliminar", on_click=confirmar),
+            ]))
 
     def _do_delete(self, sid: int) -> None:
         self.db.delete_song(sid)
-        self._confirm_delete_id = None
-        self._refill(update=True)
+        self._filler.drop(lambda s: s["id"] == sid)   # quitar sí se repinta
+        _safe_update(self._list)
+        self.on_data_changed()
+        show_toast(self.page, "✓ Canción eliminada")
+
