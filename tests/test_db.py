@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from models.song import Song, Section, Line, Syllable, Chord
+from database.db import UNKNOWN_AUTHOR, PINNED_ALBUM
 
 
 def _sample_song() -> Song:
@@ -68,6 +69,25 @@ def test_delete_song(db):
     sid = db.save_song(_sample_song())
     db.delete_song(sid)
     assert db.list_songs() == []
+
+
+def test_exclude_album_oculta_esas_canciones(db):
+    db.save_song(Song(id=None, title="A", album="Himnario Adventista"))
+    db.save_song(Song(id=None, title="B", album="Himnario Adventista"))
+    db.save_song(Song(id=None, title="C", author="Otro"))
+
+    resultado = db.list_songs(exclude_album="Himnario Adventista")
+    assert [s["title"] for s in resultado] == ["C"]
+    # sin exclude_album, vuelven a aparecer las tres
+    assert len(db.list_songs()) == 3
+
+
+def test_exclude_album_no_afecta_otros_albumes(db):
+    db.save_song(Song(id=None, title="A", album="Himnario Adventista"))
+    db.save_song(Song(id=None, title="B", album="Cancionero Juvenil"))
+
+    resultado = db.list_songs(exclude_album="Himnario Adventista")
+    assert [s["title"] for s in resultado] == ["B"]
 
 
 def _song(title, author=None, key=None):
@@ -148,3 +168,98 @@ def test_update_existing_song(db):
     assert loaded.title == "Título actualizado"
     # No se duplicó: sigue habiendo una sola canción
     assert len(db.list_songs()) == 1
+
+
+def test_list_albumes_y_autores_mezcla_y_ordena(db):
+    # Himnario Adventista: álbum SIN autor por canción (como la migración real).
+    db.save_song(Song(id=None, title="A", album="Himnario Adventista"))
+    db.save_song(Song(id=None, title="B", album="Himnario Adventista"))
+    # Otro álbum, con autor propio por canción (álbum y autor no son excluyentes).
+    db.save_song(Song(id=None, title="C", album="Cancionero Juvenil", author="Ana Pérez"))
+    db.save_song(Song(id=None, title="D", author="Ana Pérez"))       # solo autor
+    db.save_song(Song(id=None, title="E", author=None))              # sin autor ni álbum
+
+    entradas = db.list_albumes_y_autores()
+    resumen = [(e["tipo"], e["name"], e["song_count"]) for e in entradas]
+    assert resumen == [
+        ("album", "Himnario Adventista", 2),   # fijado primero
+        ("album", "Cancionero Juvenil", 1),    # álbumes antes que autores
+        ("autor", "Ana Pérez", 2),             # D y también C (tiene álbum y autor)
+        ("autor", UNKNOWN_AUTHOR, 1),          # solo E: A y B ya están en su álbum
+    ]
+
+
+def test_set_album_favorite(db):
+    db.save_song(Song(id=None, title="A", album="Himnario Adventista"))
+    db.set_album_favorite("Himnario Adventista", True)
+    entradas = db.list_albumes_y_autores()
+    assert entradas[0]["favorite"] == 1
+
+    db.set_album_favorite("Himnario Adventista", False)
+    entradas = db.list_albumes_y_autores()
+    assert entradas[0]["favorite"] == 0
+
+
+def test_rename_album_propaga_y_conserva_favorito(db):
+    db.save_song(Song(id=None, title="A", album="Hinnario Aventista"))
+    db.save_song(Song(id=None, title="B", album="Hinnario Aventista"))
+    db.set_album_favorite("Hinnario Aventista", True)
+
+    db.rename_album("Hinnario Aventista", "Himnario Adventista")
+
+    assert db.distinct_values("album") == ["Himnario Adventista"]
+    assert len(db.list_songs(filters={"album": "Himnario Adventista"})) == 2
+    entradas = db.list_albumes_y_autores()
+    assert entradas[0]["name"] == "Himnario Adventista"
+    assert entradas[0]["favorite"] == 1
+
+
+def test_delete_album_borra_sus_canciones(db):
+    db.save_song(Song(id=None, title="A", album="Himnario Adventista"))
+    db.save_song(Song(id=None, title="B", album="Himnario Adventista"))
+    db.save_song(Song(id=None, title="C", author="Otro"))
+
+    deleted = db.delete_album("Himnario Adventista")
+
+    assert deleted == 2
+    assert len(db.list_songs()) == 1
+    assert db.list_songs()[0]["title"] == "C"
+
+
+def test_migra_himnario_de_author_a_album_al_iniciar(db):
+    """Simula una base "vieja" (como la del teléfono, nunca tocada por el script
+    manual): canciones con ``author = PINNED_ALBUM`` y sin álbum. Al arrancar de
+    nuevo (``init_schema``, lo que hace la app en cada apertura), se migran solas."""
+    db.save_song(Song(id=None, title="A", author=PINNED_ALBUM))
+    db.save_song(Song(id=None, title="B", author=PINNED_ALBUM))
+    db.save_song(Song(id=None, title="C", author="Otro"))
+
+    db.init_schema()      # simula el siguiente arranque de la app
+
+    por_titulo = {r["title"]: db.load_song(r["id"]) for r in db.list_songs()}
+    assert por_titulo["A"].author is None
+    assert por_titulo["A"].album == PINNED_ALBUM
+    assert por_titulo["B"].author is None
+    assert por_titulo["B"].album == PINNED_ALBUM
+    assert por_titulo["C"].author == "Otro"
+    assert por_titulo["C"].album is None
+
+
+def test_migracion_de_himnario_es_idempotente(db):
+    db.save_song(Song(id=None, title="A", author=PINNED_ALBUM))
+    db.init_schema()
+    db.init_schema()      # correr de nuevo no debe romper ni duplicar nada
+
+    assert len(db.list_songs()) == 1
+    loaded = db.load_song(db.list_songs()[0]["id"])
+    assert loaded.album == PINNED_ALBUM
+    assert loaded.author is None
+
+
+def test_migracion_no_toca_canciones_que_ya_tienen_album(db):
+    db.save_song(Song(id=None, title="A", author=PINNED_ALBUM, album="Otro álbum"))
+    db.init_schema()
+
+    loaded = db.load_song(db.list_songs()[0]["id"])
+    assert loaded.author == PINNED_ALBUM     # no se tocó: ya tenía álbum propio
+    assert loaded.album == "Otro álbum"

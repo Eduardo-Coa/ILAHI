@@ -2,12 +2,12 @@
 
 Las cinco vistas del panel principal se recorren como una SECUENCIA plana:
 
-    Autores · Canciones · Favoritos · Listas · Ajustes
+    Álbumes · Canciones · Favoritos · Listas · Ajustes
     └────── Biblioteca ──────┘
 
 Se desliza de lado (o se toca una pestaña) para moverse entre ellas. La barra
 inferior queda fija —solo se mueve el contenido— y resalta «Biblioteca» tanto en
-Autores como en Canciones.
+Álbumes como en Canciones.
 
 El deslizamiento lo hace ``ft.PageView``, o sea el PageView de Flutter: el arrastre
 SIGUE AL DEDO y se acomoda al soltar con física nativa, todo del lado de Dart. Esto
@@ -24,8 +24,8 @@ limpio (p. ej. quedó filtrada por lo tipeado) y se rehace recién cuando vuelve
 hacer falta.
 
 El chrome FIJO (no se mueve) es: el logo (siempre), y —solo en Biblioteca— el toggle
-Autores|Canciones y el buscador (cambia su placeholder, no se recrea, así mantiene el
-foco). Lo único que se desliza es el cuerpo (chip del autor + lista).
+Álbumes|Canciones y el buscador (cambia su placeholder, no se recrea, así mantiene el
+foco). Lo único que se desliza es el cuerpo (chip del filtro + lista).
 
 El shell no conoce las pantallas: recibe ``build_page(i, query)`` que arma el cuerpo
 de la vista ``i`` filtrado por ``query``, y ``search_hint(i)`` para el placeholder.
@@ -42,12 +42,13 @@ from views.widgets import logo_header, SlidingToggle, _safe_update, accent_fab
 from views.search_field import search_pill
 
 # Secuencia plana. Cada índice sabe qué pestaña de la barra inferior resalta:
-# Autores y Canciones son ambos «Biblioteca».
+# Álbumes y Canciones son ambos «Biblioteca».
 TAB_OF = ["library", "library", "favorites", "setlists", "settings"]
-# Pestaña -> índice al que salta tocarla (Biblioteca abre Canciones, no Autores).
-INDEX_OF_TAB = {"library": 1, "favorites": 2, "setlists": 3, "settings": 4}
-# Índice de Canciones: el «hogar» del panel (a donde vuelve el «atrás» del sistema).
-HOME_INDEX = 1
+# Pestaña -> índice al que salta tocarla (Biblioteca abre Álbumes).
+INDEX_OF_TAB = {"library": 0, "favorites": 2, "setlists": 3, "settings": 4}
+# Índice de Álbumes: el «hogar» del panel (a donde abre la app y vuelve el «atrás»
+# del sistema).
+HOME_INDEX = 0
 
 
 class MainShell:
@@ -65,11 +66,11 @@ class MainShell:
         # vista no lleva buscador en el chrome (p. ej. Ajustes, o las que traen el suyo).
         self.search_hint = search_hint or (lambda i: None)
         # on_navigate(i) -> aviso a main de que la vista cambió a i (deslizando/tocando
-        # pestaña). Lo usa para soltar estado ligado a otra vista (p. ej. el autor
-        # elegido en Autores). No se dispara en refresh/rebuild (mismo índice).
+        # pestaña). Lo usa para soltar estado ligado a otra vista (p. ej. el álbum o
+        # autor elegido en Álbumes). No se dispara en refresh/rebuild (mismo índice).
         self.on_navigate = on_navigate or (lambda i: None)
         # fab_action(i) -> qué hace el botón ＋ FIJO en la vista i, o None si esa vista
-        # no lo lleva (Autores, Ajustes). El ＋ es del shell porque lo comparten
+        # no lo lleva (Álbumes, Ajustes). El ＋ es del shell porque lo comparten
         # Canciones, Favoritos y Listas (3 vistas seguidas).
         self.fab_action = fab_action or (lambda i: None)
         self.index = max(0, min(len(TAB_OF) - 1, index))
@@ -94,13 +95,13 @@ class MainShell:
             on_change=self._on_page_change)
         self._ensure_around(self.index)
         # Chrome FIJO (no se desliza): logo siempre; y —solo en Biblioteca— el toggle
-        # Autores|Canciones y el buscador. Lo único que se desliza es el cuerpo (chip
-        # del autor + lista). El toggle y el buscador viven en contenedores cuya
+        # Álbumes|Canciones y el buscador. Lo único que se desliza es el cuerpo (chip
+        # del filtro + lista). El toggle y el buscador viven en contenedores cuya
         # visibilidad/placeholder se ajustan al cambiar de vista.
         # Toggle PERSISTENTE: no se reconstruye al cambiar de vista (por eso su
         # píldora puede deslizarse en vez de saltar); solo se le mueve el lado activo.
         self._toggle = SlidingToggle(
-            "Autores", "Canciones",
+            "Álbumes", "Canciones",
             on_left=lambda: self.goto(0), on_right=lambda: self.goto(1),
             active="right" if self.index == 1 else "left")
         self._toggle_holder = ft.Container(
@@ -151,7 +152,7 @@ class MainShell:
 
     # -- chrome fijo (logo siempre; toggle solo en Biblioteca) ---------
     def _shows_toggle(self, i: int) -> bool:
-        """El toggle Autores|Canciones solo tiene sentido en Biblioteca (índices 0 y 1)."""
+        """El toggle Álbumes|Canciones solo tiene sentido en Biblioteca (índices 0 y 1)."""
         return i in (0, 1)
 
     def _sync_chrome(self, i: int) -> None:

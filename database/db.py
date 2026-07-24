@@ -26,6 +26,9 @@ _BACKUP_REQUIRED_TABLES = {"songs", "sections", "setlists", "setlist_songs"}
 UNKNOWN_AUTHOR = "\x00__sin_autor__"
 UNKNOWN_AUTHOR_LABEL = "Desconocido"
 
+# El álbum que viene incluido en la app: va siempre primero en «Álbumes».
+PINNED_ALBUM = "Himnario Adventista"
+
 
 def author_display(name: str | None) -> str:
     """Nombre a mostrar para un autor: «Desconocido» si falta o es el marcador."""
@@ -291,6 +294,13 @@ class Database:
                 name TEXT PRIMARY KEY
             )
         """)
+        # Álbumes favoritos: mismo patrón que ``author_favorites`` (el álbum tampoco
+        # es una entidad propia, es ``songs.album``).
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS album_favorites (
+                name TEXT PRIMARY KEY
+            )
+        """)
         # Rastro de cada escritura a songs.favorite (bug abierto, ver ROADMAP).
         cur.execute("""
             CREATE TABLE IF NOT EXISTS fav_audit (
@@ -316,6 +326,36 @@ class Database:
         cur.execute("CREATE INDEX IF NOT EXISTS idx_syllables_line ON syllables(line_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_chords_syllable ON chords(syllable_id)")
         conn.commit()
+        self._migrate_pinned_album_from_author()
+
+    def _migrate_pinned_album_from_author(self) -> None:
+        """Migración idempotente: canciones que todavía tengan
+        ``author = PINNED_ALBUM`` (de antes de que existiera el campo álbum) pasan a
+        tener ``album = PINNED_ALBUM`` y el autor vacío.
+
+        Corre en cada arranque (``init_schema`` se llama siempre al abrir la app),
+        pero no hace nada si ya no queda ninguna por migrar — así se autoaplica en
+        cualquier dispositivo (p. ej. el teléfono) sin depender de un script manual
+        corrido a mano contra la base de escritorio, que es justo lo que dejó
+        desactualizada a la base real la primera vez.
+        """
+        conn = self._connect()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM songs WHERE author = ? AND (album IS NULL OR album = '')",
+            (PINNED_ALBUM,),
+        )
+        if cur.fetchone()[0] == 0:
+            return
+        self.backup("migrar Himnario Adventista de author a album")
+        with self._tx("error al migrar %r de author a album", PINNED_ALBUM) as cur:
+            cur.execute(
+                "UPDATE songs SET author = NULL, album = ? "
+                "WHERE author = ? AND (album IS NULL OR album = '')",
+                (PINNED_ALBUM, PINNED_ALBUM),
+            )
+            migrated = cur.rowcount
+        _log.info("migradas %d canciones de author a album (%r)", migrated, PINNED_ALBUM)
 
     def _ensure_column(self, cur: sqlite3.Cursor, table: str, column: str,
                        coldef: str) -> None:
@@ -481,12 +521,14 @@ class Database:
     # SQL real (evita inyección). Para agregar un filtro nuevo, basta una línea.
     _FILTER_COLUMNS = {
         "author": "author",
+        "album": "album",
         "rhythm": "rhythm",
         "key": "`key`",
     }
 
     def list_songs(
-        self, query: str = "", filters: dict[str, str] | None = None
+        self, query: str = "", filters: dict[str, str] | None = None,
+        exclude_album: str | None = None,
     ) -> list[dict]:
         """
         Devuelve dicts con id, title, author, key, rhythm y favorite.
@@ -494,8 +536,11 @@ class Database:
 
         ``query`` filtra por título o autor (búsqueda parcial). ``filters`` es un
         dict {campo: valor} para filtros exactos (ej. {"author": "..."}); solo se
-        aceptan los campos de ``_FILTER_COLUMNS``. Todos los criterios se combinan
-        con AND.
+        aceptan los campos de ``_FILTER_COLUMNS``. ``exclude_album`` saca de la
+        lista las canciones de ese álbum exacto (pensado para no inundar
+        "Canciones" con el Himnario incluido; quien llama decide cuándo usarlo,
+        p. ej. solo si no hay ``query`` ni ``filters`` activos, para que buscar
+        siga encontrando esas canciones). Todos los criterios se combinan con AND.
         """
         where: list[str] = []
         params: list[str] = []
@@ -504,6 +549,10 @@ class Database:
             pattern = f"%{query}%"
             where.append("(title LIKE ? OR author LIKE ?)")
             params.extend([pattern, pattern])
+
+        if exclude_album:
+            where.append("(album IS NULL OR album <> ?)")
+            params.append(exclude_album)
 
         for field, value in (filters or {}).items():
             column = self._FILTER_COLUMNS.get(field)
@@ -515,7 +564,7 @@ class Database:
                 where.append(f"{column} = ?")
                 params.append(value)
 
-        sql = "SELECT id, title, author, `key`, rhythm, favorite FROM songs"
+        sql = "SELECT id, title, author, album, `key`, rhythm, favorite FROM songs"
         if where:
             sql += " WHERE " + " AND ".join(where)
         # Orden alfabético puro. Los favoritos NO suben al tope a propósito: subirlos
@@ -589,6 +638,101 @@ class Database:
             authors.append({"name": UNKNOWN_AUTHOR, "song_count": sin_autor,
                             "favorite": 0, "unknown": True})
         return authors
+
+    # ------------------------------------------------------------------
+    # Álbumes (derivados de songs.album; el favorito vive en album_favorites)
+    # ------------------------------------------------------------------
+
+    def list_albumes_y_autores(self) -> list[dict]:
+        """Álbumes Y autores en una sola lista (pestaña «Álbumes»).
+
+        Cada dict trae ``name``, ``tipo`` ("album" o "autor"), ``song_count`` y
+        ``favorite``. ``PINNED_ALBUM`` (la biblioteca incluida en la app) va
+        siempre primero; el resto, álbumes antes que autores, alfabético dentro
+        de cada grupo. El grupo «Desconocido» (canciones sin autor) se agrega al
+        final de los autores, igual que en ``list_authors``.
+        """
+        conn = self._connect()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT s.album AS name,
+                   COUNT(*) AS song_count,
+                   (f.name IS NOT NULL) AS favorite
+            FROM songs s
+            LEFT JOIN album_favorites f ON f.name = s.album
+            WHERE s.album IS NOT NULL AND s.album <> ''
+            GROUP BY s.album
+        """)
+        albumes = [dict(row) for row in cur.fetchall()]
+        for a in albumes:
+            a["tipo"] = "album"
+
+        cur.execute("""
+            SELECT s.author AS name,
+                   COUNT(*) AS song_count,
+                   (f.name IS NOT NULL) AS favorite
+            FROM songs s
+            LEFT JOIN author_favorites f ON f.name = s.author
+            WHERE s.author IS NOT NULL AND s.author <> ''
+            GROUP BY s.author
+        """)
+        autores = [dict(row) for row in cur.fetchall()]
+        for a in autores:
+            a["tipo"] = "autor"
+
+        # «Desconocido» son canciones sin autor NI álbum: una canción sin autor
+        # pero CON álbum ya está representada por su álbum, no debe además inflar
+        # este grupo (si no, el mismo himnario aparecería duplicado dos veces).
+        cur.execute("""
+            SELECT COUNT(*) FROM songs
+            WHERE (author IS NULL OR author = '') AND (album IS NULL OR album = '')
+        """)
+        sin_autor = cur.fetchone()[0]
+        if sin_autor:
+            autores.append({"name": UNKNOWN_AUTHOR, "song_count": sin_autor,
+                            "favorite": 0, "unknown": True, "tipo": "autor"})
+
+        entradas = albumes + autores
+        entradas.sort(key=lambda e: (e["name"] != PINNED_ALBUM, e["tipo"] != "album",
+                                     author_display(e["name"]).lower()))
+        return entradas
+
+    def set_album_favorite(self, name: str, favorite: bool) -> None:
+        """Marca o desmarca un álbum como favorito (mismo patrón que autor)."""
+        with self._tx("error al marcar álbum favorito %r", name) as cur:
+            if favorite:
+                cur.execute(
+                    "INSERT OR IGNORE INTO album_favorites (name) VALUES (?)", (name,))
+            else:
+                cur.execute("DELETE FROM album_favorites WHERE name=?", (name,))
+
+    def rename_album(self, old: str, new: str) -> None:
+        """Renombra un álbum en todas sus canciones. Si ``new`` queda vacío, las
+        canciones quedan sin álbum (NULL). La marca de favorito viaja con el nombre."""
+        new_value = new.strip() or None
+        self.backup("rename_album")
+        with self._tx("error al renombrar álbum %r", old) as cur:
+            cur.execute("UPDATE songs SET album=? WHERE album=?", (new_value, old))
+            cur.execute("SELECT 1 FROM album_favorites WHERE name=?", (old,))
+            was_favorite = cur.fetchone() is not None
+            cur.execute("DELETE FROM album_favorites WHERE name=?", (old,))
+            if was_favorite and new_value:
+                cur.execute(
+                    "INSERT OR IGNORE INTO album_favorites (name) VALUES (?)", (new_value,))
+        _log.info("álbum renombrado: %r -> %r", old, new_value)
+
+    def delete_album(self, name: str) -> int:
+        """Elimina un álbum y **todas sus canciones**. Devuelve cuántas borró.
+
+        Hace backup antes: es la operación más destructiva de la app.
+        """
+        self.backup("delete_album")
+        with self._tx("error al eliminar álbum %r", name) as cur:
+            cur.execute("DELETE FROM songs WHERE album=?", (name,))
+            deleted = cur.rowcount
+            cur.execute("DELETE FROM album_favorites WHERE name=?", (name,))
+        _log.info("álbum eliminado: %r (%d canciones)", name, deleted)
+        return deleted
 
     def set_author_favorite(self, name: str, favorite: bool) -> None:
         """Marca o desmarca un autor como favorito (sale primero en la lista)."""

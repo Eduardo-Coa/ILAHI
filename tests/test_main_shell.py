@@ -50,10 +50,10 @@ class _Swipe:
 
 
 def test_la_secuencia_y_el_mapeo_de_pestanas():
-    """Autores y Canciones son «Biblioteca»; cada pestaña abre su vista."""
+    """Álbumes y Canciones son «Biblioteca»; cada pestaña abre su vista."""
     assert TAB_OF == ["library", "library", "favorites", "setlists", "settings"]
-    assert INDEX_OF_TAB == {"library": 1, "favorites": 2, "setlists": 3, "settings": 4}
-    assert HOME_INDEX == 1               # Canciones es el «hogar» del panel
+    assert INDEX_OF_TAB == {"library": 0, "favorites": 2, "setlists": 3, "settings": 4}
+    assert HOME_INDEX == 0               # Álbumes es el «hogar» del panel
 
 
 # -- qué se construye y cuándo -------------------------------------------------

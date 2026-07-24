@@ -22,7 +22,7 @@ from models.transposer import transpose_song
 import theme
 from sample_data import sample_songs, sample_setlist
 from views.song_list_view import SongsScreen, show_add_sheet
-from views.author_list_view import AuthorsScreen
+from views.author_list_view import AlbumsScreen
 from views.setlist_view import build_setlists, SetlistDetailScreen, SongPickerScreen
 from views.stage_view import StageScreen, PresentScreen
 from views.edit_view import NewSongScreen, EditSongScreen, EditLyricsScreen
@@ -171,8 +171,8 @@ def main(page: ft.Page) -> None:
         en vez de dejar que Android cierre la app (que mandaba al inicio del teléfono,
         porque la navegación es propia y no una pila de vistas de Flet).
 
-        - En el panel principal (shell): si no estamos en Canciones, va a Canciones;
-          si ya estamos ahí, se deja salir de la app (``confirm_pop(True)``).
+        - En el panel principal (shell): si no estamos en Álbumes (``HOME_INDEX``),
+          va ahí; si ya estamos ahí, se deja salir de la app (``confirm_pop(True)``).
         - En una pantalla interna: ejecuta su «volver».
 
         ``confirm_pop(False)`` cancela la salida pendiente (si no, expiraría por timeout)."""
@@ -182,7 +182,7 @@ def main(page: ft.Page) -> None:
                 shell.goto(HOME_INDEX)
                 await page.views[0].confirm_pop(False)
             else:
-                await page.views[0].confirm_pop(True)     # Canciones → cerrar la app
+                await page.views[0].confirm_pop(True)     # Álbumes → cerrar la app
             return
         volver = _nav["back"]
         if volver is not None:
@@ -365,31 +365,32 @@ def main(page: ft.Page) -> None:
 
     # ------------------------------------------------------------------
     # Panel principal: shell con las 5 vistas (swipe + deslizamiento + barra fija).
-    # Secuencia: Autores · Canciones · Favoritos · Listas · Ajustes. Las funciones
+    # Secuencia: Álbumes · Canciones · Favoritos · Listas · Ajustes. Las funciones
     # go_* siguen siendo los puntos de entrada (las pantallas hoja las usan para
     # «volver» al panel en la vista correcta).
     # ------------------------------------------------------------------
     shell_state = {"shell": None}          # el MainShell activo (para el back del sistema)
-    main_state = {"author": None}          # autor elegido en Autores (drill-down)
+    main_state = {"filtro": None}          # (tipo, nombre) elegido en Álbumes (drill-down)
 
-    def open_author_songs(name: str) -> None:
-        """Toca un autor → se QUEDA en Autores mostrando sus canciones (con el chip
-        debajo del buscador). No cambia de pestaña ni desliza: refresh en el sitio."""
-        main_state["author"] = name
+    def open_entry_songs(tipo: str, name: str) -> None:
+        """Toca un álbum o autor → se QUEDA en Álbumes mostrando sus canciones (con
+        el chip debajo del buscador). No cambia de pestaña ni desliza: refresh en
+        el sitio."""
+        main_state["filtro"] = (tipo, name)
         if shell_state["shell"] is not None:
             shell_state["shell"].refresh()
 
-    def clear_author() -> None:
-        """Quita el filtro por autor → vuelve a la lista de autores (misma vista)."""
-        main_state["author"] = None
+    def clear_entry() -> None:
+        """Quita el filtro activo → vuelve a la lista de álbumes/autores (misma vista)."""
+        main_state["filtro"] = None
         if shell_state["shell"] is not None:
             shell_state["shell"].refresh()
 
     def _on_navigate(i: int) -> None:
-        """Al salir de Autores (deslizando o tocando otra pestaña) se suelta el autor
-        elegido, para que al volver se vea la lista de autores y no el drill-down."""
+        """Al salir de Álbumes (deslizando o tocando otra pestaña) se suelta el
+        filtro elegido, para que al volver se vea la lista y no el drill-down."""
         if i != 0:
-            main_state["author"] = None
+            main_state["filtro"] = None
 
     def refresh_shell(status: str = "") -> None:
         """Reconstruye la vista actual del shell (tras borrar/renombrar) + toast."""
@@ -408,29 +409,30 @@ def main(page: ft.Page) -> None:
         if shell_state["shell"] is not None:
             shell_state["shell"].invalidate_others()
 
-    def _songs_body(tab: str, query: str, author: str | None = None) -> ft.Control:
+    def _songs_body(tab: str, query: str,
+                    filtro: tuple[str, str] | None = None) -> ft.Control:
         """Cuerpo de una lista de canciones embebida (buscador fijo del shell)."""
         return SongsScreen(
             page, db, on_open_song=go_stage, on_open_setlists=lambda: _goto(3),
             on_import=do_import, on_export_all=do_export_all,
             on_new_song=go_new_song, on_edit_song=go_edit_song,
             on_export_song=do_export_song, on_open_authors=lambda: _goto(0),
-            on_open_settings=lambda: _goto(4), tab=tab, author=author,
+            on_open_settings=lambda: _goto(4), tab=tab, filtro=filtro,
             embedded=True, external_search=True, query=query,
-            on_clear_author=clear_author if author else None,
+            on_clear_filter=clear_entry if filtro else None,
             on_data_changed=_invalidate_others).build()
 
     def build_main_page(i: int, query: str = "") -> ft.Control:
         """Cuerpo de la vista ``i`` filtrado por ``query`` (logo, toggle, buscador y
-        barra los pone el shell). En Autores con un autor elegido se muestran sus
+        barra los pone el shell). En Álbumes con una entrada elegida se muestran sus
         canciones (drill-down); Favoritos/Listas traen su propio buscador."""
-        if i == 0 and main_state["author"] is None:     # Autores: lista de autores
-            return AuthorsScreen(
-                page, db, on_open_author=open_author_songs,
-                on_back=lambda: _goto(1), on_export_author=export_author_fn,
+        if i == 0 and main_state["filtro"] is None:     # Álbumes: lista de entradas
+            return AlbumsScreen(
+                page, db, on_open_entry=open_entry_songs,
+                on_back=lambda: _goto(1), on_export_entry=export_entry_fn,
                 on_tab=None, embedded=True, external_search=True, query=query).build()
-        if i == 0:                          # Autores + autor elegido: SUS canciones
-            return _songs_body("library", query, author=main_state["author"])
+        if i == 0:                          # Álbumes + entrada elegida: SUS canciones
+            return _songs_body("library", query, filtro=main_state["filtro"])
         if i == 1:                          # Canciones (todas)
             return _songs_body("library", query)
         if i == 2:                          # Favoritos
@@ -455,7 +457,7 @@ def main(page: ft.Page) -> None:
     def search_hint(i: int) -> str | None:
         """Placeholder del buscador fijo por vista (None solo en Ajustes)."""
         if i == 0:
-            return "Buscar himno…" if main_state["author"] else "Buscar autor…"
+            return "Buscar himno…" if main_state["filtro"] else "Buscar álbum o autor…"
         if i == 1:
             return "Buscar himno o autor…"
         if i == 2:
@@ -470,7 +472,7 @@ def main(page: ft.Page) -> None:
 
     def fab_action(i: int):
         """Qué hace el ＋ fijo por vista: en Canciones/Favoritos abre «Añadir»; en
-        Listas crea una lista; en Autores/Ajustes no hay ＋ (None → oculto)."""
+        Listas crea una lista; en Álbumes/Ajustes no hay ＋ (None → oculto)."""
         if i in (1, 2):
             return open_add_sheet
         if i == 3:
@@ -486,27 +488,23 @@ def main(page: ft.Page) -> None:
         if status:
             show_toast(page, status)         # confirmación flotante (toast)
 
-    def go_home(status: str = "", tab: str = "library",
-                author: str | None = None) -> None:
-        main_state["author"] = author        # None normalmente: suelta el drill-down
-        if author is not None:
-            show_main(0, status=status)      # Autores con ese autor (drill-down)
-        else:
-            show_main(2 if tab == "favorites" else HOME_INDEX, status=status)
+    def go_home(status: str = "", tab: str = "library") -> None:
+        main_state["filtro"] = None          # suelta el drill-down de Álbumes
+        show_main(2 if tab == "favorites" else HOME_INDEX, status=status)
 
-    async def export_author_fn(author: str) -> str:
-        """Exporta el cancionero de un autor; devuelve el mensaje de estado."""
-        etiqueta = author_display(author)
-        rows = db.list_songs(filters={"author": author})
+    async def export_entry_fn(tipo: str, name: str) -> str:
+        """Exporta el cancionero de un álbum o autor; devuelve el mensaje de estado."""
+        etiqueta = author_display(name)
+        rows = db.list_songs(filters={tipo: name})
         if not rows:
             return f"«{etiqueta}» no tiene canciones"
-        # El bundle no lleva nombre de autor si es el grupo «Desconocido».
-        bundle_author = None if author == UNKNOWN_AUTHOR else author
+        # El bundle no lleva nombre si es el grupo «Desconocido» (solo autor).
+        bundle_name = None if name == UNKNOWN_AUTHOR else name
         try:
             songs = [db.load_song(r["id"]) for r in rows]
-            msg = await save_bytes(bundle_to_bytes(songs, bundle_author),
+            msg = await save_bytes(bundle_to_bytes(songs, bundle_name),
                                    f"Exportar cancionero de {etiqueta}",
-                                   bundle_filename(bundle_author))
+                                   bundle_filename(bundle_name))
         except SongIOError as ex:
             return f"✗ {ex}"
         return msg or f"✓ Exportadas {len(songs)} canciones de «{etiqueta}»"

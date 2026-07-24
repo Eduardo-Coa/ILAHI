@@ -1,11 +1,13 @@
-"""Pantalla de autores: mismo estilo de tarjeta que las canciones.
+"""Pantalla «Álbumes»: álbumes Y autores en una sola lista, mismo estilo de tarjeta
+que las canciones.
 
-Ícono de perfil (dorado si el autor es favorito) · nombre · badge con el número
-de canciones · menú ⋮ (Editar nombre / Exportar / Favorito / Eliminar).
+Ícono que distingue el tipo (dorado si es favorito): disco para álbum, persona
+para autor · nombre · badge con el número de canciones · menú ⋮ (Editar nombre /
+Exportar / Favorito / Eliminar).
 
-El autor no es una entidad propia (es un campo de ``songs``): su marca de
-favorito vive en la tabla ``author_favorites``, referenciada por nombre.
-Eliminar un autor borra **todas sus canciones**, por eso pide confirmación
+Ni el álbum ni el autor son una entidad propia (son campos de ``songs``): sus
+marcas de favorito viven en ``album_favorites``/``author_favorites``, referenciadas
+por nombre. Eliminar uno borra **todas sus canciones**, por eso pide confirmación
 diciendo cuántas son.
 """
 
@@ -21,29 +23,29 @@ from views.widgets import (show_toast, segmented_toggle, logo_header, _safe_upda
 from views.search_field import search_pill
 
 
-class AuthorsScreen:
-    """Lista de autores con favorito, renombrar, exportar y eliminar."""
+class AlbumsScreen:
+    """Lista de álbumes y autores con favorito, renombrar, exportar y eliminar."""
 
     def __init__(self, page: ft.Page, db,
-                 on_open_author: Callable[[str], None],
+                 on_open_entry: Callable[[str, str], None],
                  on_back: Callable[[], None],
-                 on_export_author: Callable,
+                 on_export_entry: Callable,
                  on_tab: Callable[[str], None] | None = None,
                  embedded: bool = False, external_search: bool = False,
                  query: str = "") -> None:
         self.page = page
         self.db = db
-        self.on_open_author = on_open_author      # ver las canciones de ese autor
+        self.on_open_entry = on_open_entry        # ver las canciones de esa entrada
         self.on_back = on_back
-        self.on_export_author = on_export_author  # async: exporta su cancionero
+        self.on_export_entry = on_export_entry     # async: exporta su cancionero
         self.on_tab = on_tab
-        # Embebida en el shell: el logo y el toggle Autores|Canciones los fija el
-        # shell; aquí solo va el cuerpo deslizante (lista de autores). Con
+        # Embebida en el shell: el logo y el toggle Álbumes|Canciones los fija el
+        # shell; aquí solo va el cuerpo deslizante (lista de álbumes/autores). Con
         # ``external_search`` el buscador también es del shell y el filtro llega en
         # ``query``.
         self.embedded = embedded
         self.external_search = external_search
-        self._confirm_delete: str | None = None
+        self._confirm_delete: tuple[str, str] | None = None   # (tipo, name)
         self._query = query
         self._list = ft.ListView(expand=True, controls=[])
 
@@ -54,12 +56,12 @@ class AuthorsScreen:
         if not self.embedded:
             children.append(logo_header())
         if not self.external_search:            # el buscador fijo lo pone el shell
-            children.append(search_pill("Buscar autor…", self._on_query))
+            children.append(search_pill("Buscar álbum o autor…", self._on_query))
         if not self.embedded:
-            # Toggle Autores | Canciones (Autores activa aquí); a «Canciones» vuelve a
+            # Toggle Álbumes | Canciones (Álbumes activa aquí); a «Canciones» vuelve a
             # la biblioteca. Embebida, este toggle lo fija el shell.
             children.append(segmented_toggle(
-                "Autores", "Canciones", active="left",
+                "Álbumes", "Canciones", active="left",
                 on_left=lambda: None, on_right=lambda: self.on_back()))
         children.append(self._list)
         if self.on_tab is not None:
@@ -75,12 +77,13 @@ class AuthorsScreen:
         self._refill(update=True)
 
     def _refill(self, update: bool = True) -> None:
-        authors = self.db.list_authors()
+        entradas = self.db.list_albumes_y_autores()
         if self._query:
             needle = self._query.lower()
-            authors = [a for a in authors if needle in author_display(a["name"]).lower()]
-        if authors:
-            self._list.controls = [self._author_tile(a) for a in authors]
+            entradas = [e for e in entradas
+                       if needle in author_display(e["name"]).lower()]
+        if entradas:
+            self._list.controls = [self._entry_tile(e) for e in entradas]
         else:
             self._list.controls = [ft.Container(
                 key="empty", padding=20, content=ft.Text(
@@ -90,23 +93,24 @@ class AuthorsScreen:
             _safe_update(self._list)
 
     # ------------------------------------------------------------------
-    # Tarjeta de autor
+    # Tarjeta de álbum/autor
     # ------------------------------------------------------------------
-    def _author_tile(self, author: dict) -> ft.Control:
-        name = author["name"]
-        if name == self._confirm_delete:
-            return self._confirm_tile(author)
-        fav = bool(author["favorite"])
-        unknown = bool(author.get("unknown"))
+    def _entry_tile(self, entry: dict) -> ft.Control:
+        tipo = entry["tipo"]               # "album" | "autor"
+        name = entry["name"]
+        if (tipo, name) == self._confirm_delete:
+            return self._confirm_tile(entry)
+        fav = bool(entry["favorite"])
+        unknown = bool(entry.get("unknown"))
         return list_row_card([
-            self._avatar(name, fav, unknown),
+            self._avatar(tipo, name, fav, unknown),
             ft.Container(
                 expand=True, ink=True, border_radius=10,
-                on_click=lambda _e: self.on_open_author(name),
+                on_click=lambda _e: self.on_open_entry(tipo, name),
                 padding=ft.Padding.symmetric(horizontal=4, vertical=4),
-                content=self._info(name, author["song_count"])),
-            self._menu(name, fav, unknown),
-        ], key=f"author-{name}")
+                content=self._info(name, entry["song_count"])),
+            self._menu(tipo, name, fav, unknown),
+        ], key=f"{tipo}-{name}")
 
     def _info(self, name: str, count: int) -> ft.Control:
         """Mismo formato de tres líneas que la barra de canción: nombre arriba,
@@ -123,97 +127,109 @@ class AuthorsScreen:
             ], spacing=4, tight=True),
         ], spacing=1, tight=True)
 
-    def _avatar(self, name: str, fav: bool, unknown: bool = False) -> ft.Control:
-        """Ícono de perfil; dorado si es favorito. Tocarlo alterna el favorito.
+    def _avatar(self, tipo: str, name: str, fav: bool, unknown: bool = False) -> ft.Control:
+        """Ícono que distingue el tipo (disco de álbum / persona de autor); dorado
+        si es favorito. Tocarlo alterna el favorito.
 
         «Desconocido» no es un autor real, así que su ícono es estático (no se
-        puede marcar como favorito).
+        puede marcar como favorito); no aplica a álbumes.
         """
         if unknown:
             return ft.Container(
                 width=48, height=48, alignment=ft.Alignment.CENTER,
                 content=ft.Icon(ft.Icons.PERSON_OFF_OUTLINED, size=22,
                                 color=theme.THEME["text_muted"]))
+        if tipo == "album":
+            icon = ft.Icons.ALBUM if fav else ft.Icons.ALBUM_OUTLINED
+        else:
+            icon = ft.Icons.PERSON if fav else ft.Icons.PERSON_OUTLINE
         return ft.IconButton(
-            icon=ft.Icons.PERSON if fav else ft.Icons.PERSON_OUTLINE,
+            icon=icon,
             icon_color=theme.THEME["accent"] if fav else theme.THEME["text_muted"],
             icon_size=22,
             tooltip="Quitar de favoritos" if fav else "Añadir a favoritos",
-            on_click=lambda _e: self._toggle_favorite(name, not fav))
+            on_click=lambda _e: self._toggle_favorite(tipo, name, not fav))
 
-    def _menu(self, name: str, fav: bool, unknown: bool = False) -> ft.Control:
+    def _menu(self, tipo: str, name: str, fav: bool, unknown: bool = False) -> ft.Control:
         # «Desconocido» no se puede renombrar ni marcar favorito (no es un autor);
         # sí exportar sus canciones y eliminarlas.
         if unknown:
             items = [
                 ft.PopupMenuItem(content="Exportar", icon=ft.Icons.UPLOAD,
-                                 on_click=self._export_handler(name)),
+                                 on_click=self._export_handler(tipo, name)),
                 ft.PopupMenuItem(content="Eliminar", icon=ft.Icons.DELETE,
-                                 on_click=lambda _e: self._ask_delete(name)),
+                                 on_click=lambda _e: self._ask_delete(tipo, name)),
             ]
         else:
             items = [
                 ft.PopupMenuItem(content="Editar nombre", icon=ft.Icons.EDIT,
-                                 on_click=lambda _e: self._ask_rename(name)),
+                                 on_click=lambda _e: self._ask_rename(tipo, name)),
                 ft.PopupMenuItem(content="Exportar", icon=ft.Icons.UPLOAD,
-                                 on_click=self._export_handler(name)),
+                                 on_click=self._export_handler(tipo, name)),
                 ft.PopupMenuItem(
                     content="Quitar de favoritos" if fav else "Añadir a favoritos",
                     icon=ft.Icons.STAR_BORDER if fav else ft.Icons.STAR,
-                    on_click=lambda _e: self._toggle_favorite(name, not fav)),
+                    on_click=lambda _e: self._toggle_favorite(tipo, name, not fav)),
                 ft.PopupMenuItem(content="Eliminar", icon=ft.Icons.DELETE,
-                                 on_click=lambda _e: self._ask_delete(name)),
+                                 on_click=lambda _e: self._ask_delete(tipo, name)),
             ]
         return ft.PopupMenuButton(icon=ft.Icons.MORE_VERT,
                                   icon_color=theme.THEME["text_muted"], items=items)
 
-    def _export_handler(self, name: str):
+    def _export_handler(self, tipo: str, name: str):
         async def handler(_e=None):
-            self._set_status(await self.on_export_author(name))
+            self._set_status(await self.on_export_entry(tipo, name))
         return handler
 
-    def _confirm_tile(self, author: dict) -> ft.Control:
-        """Eliminar un autor borra sus canciones: se dice cuántas."""
-        name = author["name"]
-        n = author["song_count"]
-        if author.get("unknown"):
+    def _confirm_tile(self, entry: dict) -> ft.Control:
+        """Eliminar un álbum/autor borra sus canciones: se dice cuántas."""
+        tipo = entry["tipo"]
+        name = entry["name"]
+        n = entry["song_count"]
+        etiqueta = "álbum" if tipo == "album" else "autor"
+        if entry.get("unknown"):
             pregunta = (f"¿Eliminar la canción sin autor?" if n == 1
                         else f"¿Eliminar las {n} canciones sin autor?")
         else:
             cuantas = "su única canción" if n == 1 else f"sus {n} canciones"
-            pregunta = f"¿Eliminar «{name}» y {cuantas}?"
+            pregunta = f"¿Eliminar el {etiqueta} «{name}» y {cuantas}?"
         return confirm_row_card(
             ft.Column(spacing=6, controls=[
                 ft.Text(pregunta, size=14, color=theme.THEME["danger"]),
                 ft.Row(alignment=ft.MainAxisAlignment.END, tight=True, controls=[
-                    ft.TextButton("Sí, eliminar", on_click=lambda _e: self._do_delete(name)),
+                    ft.TextButton("Sí, eliminar",
+                                 on_click=lambda _e: self._do_delete(tipo, name)),
                     ft.TextButton("No", on_click=lambda _e: self._cancel_delete()),
                 ]),
             ]),
-            key=f"confirm-{name}")
+            key=f"confirm-{tipo}-{name}")
 
     # ------------------------------------------------------------------
     # Acciones
     # ------------------------------------------------------------------
-    def _toggle_favorite(self, name: str, value: bool) -> None:
-        self.db.set_author_favorite(name, value)
+    def _toggle_favorite(self, tipo: str, name: str, value: bool) -> None:
+        if tipo == "album":
+            self.db.set_album_favorite(name, value)
+        else:
+            self.db.set_author_favorite(name, value)
         self._refill(update=True)      # reordena: los favoritos suben
 
-    def _ask_delete(self, name: str) -> None:
-        self._confirm_delete = name
+    def _ask_delete(self, tipo: str, name: str) -> None:
+        self._confirm_delete = (tipo, name)
         self._refill(update=True)
 
     def _cancel_delete(self) -> None:
         self._confirm_delete = None
         self._refill(update=True)
 
-    def _do_delete(self, name: str) -> None:
-        deleted = self.db.delete_author(name)
+    def _do_delete(self, tipo: str, name: str) -> None:
+        deleted = (self.db.delete_album(name) if tipo == "album"
+                  else self.db.delete_author(name))
         self._confirm_delete = None
         self._refill(update=True)
         self._set_status(f"✓ Eliminadas {deleted} canción(es) de «{author_display(name)}»")
 
-    def _ask_rename(self, name: str) -> None:
+    def _ask_rename(self, tipo: str, name: str) -> None:
         """Diálogo con esquinas redondeadas para escribir el nombre nuevo."""
         field = ft.TextField(value=name, autofocus=True, dense=True,
                              border_color=theme.THEME["border"],
@@ -225,9 +241,13 @@ class AuthorsScreen:
             self.page.pop_dialog()
             if not new or new == name:
                 return
-            self.db.rename_author(name, new)
+            if tipo == "album":
+                self.db.rename_album(name, new)
+            else:
+                self.db.rename_author(name, new)
             self._refill(update=True)
-            self._set_status(f"✓ Autor renombrado a «{new}»")
+            etiqueta = "Álbum" if tipo == "album" else "Autor"
+            self._set_status(f"✓ {etiqueta} renombrado a «{new}»")
 
         dialog = confirm_dialog(
             "Editar nombre", field,

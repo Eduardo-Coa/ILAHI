@@ -20,7 +20,7 @@ from views.widgets import (sheet_option as _sheet_option, show_toast,
                            accent_fab, sheet_dialog, list_row_card, fill_list_card,
                            confirm_dialog, FAB_CLEARANCE, WindowedList,
                            SONG_ROW_HEIGHT, SONG_ROW_EXTENT)
-from database.db import author_display
+from database.db import author_display, PINNED_ALBUM
 
 
 def show_add_sheet(page, on_new: Callable[[], None], on_import: Callable,
@@ -67,9 +67,9 @@ class SongsScreen:
                  on_open_authors: Callable[[], None],
                  on_open_settings: Callable[[], None] | None = None,
                  status: str = "", tab: str = "library",
-                 author: str | None = None, embedded: bool = False,
+                 filtro: tuple[str, str] | None = None, embedded: bool = False,
                  external_search: bool = False, query: str = "",
-                 on_clear_author: Callable[[], None] | None = None,
+                 on_clear_filter: Callable[[], None] | None = None,
                  on_data_changed: Callable[[], None] | None = None) -> None:
         self.page = page
         self.db = db
@@ -84,15 +84,17 @@ class SongsScreen:
         self.on_open_settings = on_open_settings  # pantalla de ajustes
         self.status = status
         self._tab = tab                         # "library" | "favorites"
-        self._author = author                   # filtro activo por autor
+        # Filtro activo (tipo, nombre): tipo es "author" o "album" — los dos campos
+        # que ``Database._FILTER_COLUMNS`` acepta para esta pantalla.
+        self._filtro = filtro
         # Embebida en el shell del panel principal: la barra inferior la pone el shell
-        # (no esta pantalla) y el swipe entre vistas ya cubre Autores/Canciones.
+        # (no esta pantalla) y el swipe entre vistas ya cubre Álbumes/Canciones.
         self.embedded = embedded
         # ``external_search``: el buscador lo pone el shell (fijo, arriba); aquí se
-        # omite y el filtro llega en ``query``. ``on_clear_author``: quitar el chip lo
-        # maneja el shell (vuelve a la lista de autores), no solo el refill interno.
+        # omite y el filtro llega en ``query``. ``on_clear_filter``: quitar el chip lo
+        # maneja el shell (vuelve a la lista de álbumes/autores), no solo el refill interno.
         self.external_search = external_search
-        self.on_clear_author = on_clear_author
+        self.on_clear_filter = on_clear_filter
         # Aviso de que los datos cambiaron (favorito, borrado). Biblioteca y Favoritos
         # son pantallas distintas y vivas a la vez: sin esto, marcar un favorito aquí
         # no se veía allá hasta reiniciar la app.
@@ -121,9 +123,9 @@ class SongsScreen:
         children: list[ft.Control] = []
         if not self.embedded:
             children.append(logo_header())
-        # El chip del autor va arriba del cuerpo (queda justo debajo del buscador,
+        # El chip del filtro va arriba del cuerpo (queda justo debajo del buscador,
         # que embebido es fijo y lo pone el shell).
-        children.append(self._author_chip())
+        children.append(self._filter_chip_row())
         if not self.external_search:             # el buscador fijo lo pone el shell
             children.append(self._search_field())
         if not self.embedded:
@@ -138,31 +140,41 @@ class SongsScreen:
         return ft.Stack(expand=True, controls=[column, self._fab()])
 
     # ------------------------------------------------------------------
-    # Filtro por autor
+    # Filtro por álbum o autor
     # ------------------------------------------------------------------
-    def _author_chip(self) -> ft.Control:
-        """Muestra el filtro activo por autor y permite quitarlo."""
+    def _filtro_etiqueta(self) -> str:
+        """Nombre a mostrar del filtro activo («Desconocido» solo aplica a autor;
+        un álbum siempre tiene nombre real)."""
+        if not self._filtro:
+            return ""
+        tipo, name = self._filtro
+        return author_display(name) if tipo == "author" else name
+
+    def _filter_chip_row(self) -> ft.Control:
+        """Muestra el filtro activo (álbum o autor) y permite quitarlo."""
+        es_album = bool(self._filtro) and self._filtro[0] == "album"
         self._chip_box = filter_chip(
-            author_display(self._author) if self._author else "",
-            self.on_clear_author or self._clear_author, visible=bool(self._author))
+            self._filtro_etiqueta(),
+            self.on_clear_filter or self._clear_filter, visible=bool(self._filtro),
+            icon=ft.Icons.ALBUM_OUTLINED if es_album else ft.Icons.PERSON_OUTLINE)
         self._chip_label = self._chip_box.content.controls[1]
         # Alineado a la izquierda: sin esto el chip ocuparía todo el ancho.
         return ft.Row([self._chip_box], tight=True)
 
-    def _clear_author(self) -> None:
-        self._author = None
+    def _clear_filter(self) -> None:
+        self._filtro = None
         self._chip_box.visible = False
         _safe_update(self._chip_box)
         self._refill(update=True)
 
     def _search_field(self) -> ft.Control:
-        """Buscador tipo píldora (el filtro por autor ahora vive en el toggle)."""
+        """Buscador tipo píldora (el filtro por álbum/autor ahora vive en el toggle)."""
         return search_pill("Buscar himno o autor…", self._on_query)
 
     def _toggle(self) -> ft.Control:
-        """Barra Autores | Canciones (Canciones activa aquí); a Autores → su pantalla."""
+        """Barra Álbumes | Canciones (Canciones activa aquí); a Álbumes → su pantalla."""
         return segmented_toggle(
-            "Autores", "Canciones", active="right",
+            "Álbumes", "Canciones", active="right",
             on_left=lambda: self.on_open_authors(), on_right=lambda: None)
 
     # ------------------------------------------------------------------
@@ -218,16 +230,21 @@ class SongsScreen:
     def _empty_message(self) -> str:
         if self._tab == "favorites" and not self._query:
             return "Aún no tienes favoritos. Toca la ♪ de una canción."
-        if self._author:
-            return f"(«{author_display(self._author)}» no tiene canciones que coincidan)"
+        if self._filtro:
+            return f"(«{self._filtro_etiqueta()}» no tiene canciones que coincidan)"
         return "(sin resultados)"
 
     def _refill(self, update: bool = True, keep_position: bool = False) -> None:
         """Relee la base y rearma la ventana visible. ``keep_position`` conserva el
         punto de scroll (acciones en el lugar, como borrar); una búsqueda o un cambio
         de pestaña arrancan arriba."""
-        filters = {"author": self._author} if self._author else None
-        songs = self.db.list_songs(self._query, filters)   # alfabético
+        filters = {self._filtro[0]: self._filtro[1]} if self._filtro else None
+        # El Himnario Adventista no inunda "Canciones" al navegar sin filtro (son 628
+        # de las ~635 canciones); en cuanto hay una búsqueda, un filtro activo o se está
+        # en Favoritos, sí se busca/muestra ahí también — nada queda inalcanzable.
+        exclude_album = (PINNED_ALBUM if self._tab == "library"
+                         and not self._query and not self._filtro else None)
+        songs = self.db.list_songs(self._query, filters, exclude_album)   # alfabético
         if self._tab == "favorites":
             songs = [s for s in songs if s["favorite"]]
         self._filler.reset(
@@ -288,11 +305,11 @@ class SongsScreen:
             on_click=lambda _e: self._toggle_favorite(sid, not fav))
 
     def _info(self, song: dict) -> ft.Control:
-        """Título, autor (o «Desconocido») y ritmo."""
+        """Título, autor (o álbum si no tiene autor, o «Desconocido») y ritmo."""
         return ft.Column([
             ft.Text(song["title"], size=16, weight=ft.FontWeight.W_500,
                     color=theme.THEME["text"], no_wrap=True),
-            ft.Text(song.get("author") or "Desconocido", size=12,
+            ft.Text(song.get("author") or song.get("album") or "Desconocido", size=12,
                     color=theme.THEME["text_muted"], no_wrap=True),
             ft.Row([
                 ft.Icon(ft.Icons.GRAPHIC_EQ, size=12, color=theme.THEME["text_muted"]),

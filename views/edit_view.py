@@ -182,16 +182,22 @@ class NewSongScreen:
         # todo como letra y no interpreta las líneas de acordes.
         self.detect_chords = detect_chords
 
-        self._title = _themed_field("Título")
-        self._author = _themed_field("Autor")
-        self._key = _themed_field("Tono (círculo)", width=150)
-        self._original_key = _themed_field("Tono original", width=150)
-        self._rhythm = _themed_field("Ritmo", width=150)
-        self._bpm = _themed_field("BPM", width=90)
-        self._capo = _themed_field("Capo", width=110, value="0")
+        # Misma disposición que «Editar letra» (EditLyricsScreen): campos con ``expand``
+        # y SIN ``wrap``. La versión anterior usaba ``ft.Row(..., wrap=True)`` en la fila
+        # de tono, y en Flet 0.85.3 esa fila rompía el layout: solo se veía el Título y
+        # debajo la caja de letra en gris, tapando el resto (autor, tono, Guardar).
+        self._title = _themed_field("Título", expand=True)
+        self._author = _themed_field("Autor", expand=True)
+        self._album = _themed_field("Álbum", expand=True)
+        self._key = _themed_field("Círculo", expand=True)
+        self._original_key = _themed_field("Original", expand=True)
+        self._capo = _themed_field("Capo", value="0", expand=True)
+        self._rhythm = _themed_field("Ritmo", expand=True)
+        self._bpm = _themed_field("BPM", expand=True)
         self._lyrics = ft.TextField(
             hint_text="Pega aquí la letra (y acordes, si tienes)…", multiline=True,
-            min_lines=8, max_lines=16, border=ft.InputBorder.NONE,
+            # Mismo alto que «Editar letra»: arranca en 8 líneas y crece hasta 18.
+            min_lines=8, max_lines=18, border=ft.InputBorder.NONE,
             # monoespaciada: alinea los acordes pegados sobre la letra (Cifra Club)
             text_style=ft.TextStyle(font_family=theme.FONT_MONO, size=14),
             color=theme.THEME["text"], cursor_color=theme.THEME["accent"],
@@ -208,9 +214,10 @@ class NewSongScreen:
             content=self._lyrics)
         form = ft.Column([
             self._title,
-            ft.Row([self._key, self._original_key], spacing=10, wrap=True),
-            ft.Row([self._rhythm, self._bpm, self._capo], spacing=10),
-            self._author,
+            ft.Row([self._author, self._album], spacing=10),
+            _field_section_label("Tono"),
+            ft.Row([self._key, self._original_key, self._capo], spacing=10),
+            ft.Row([self._rhythm, self._bpm], spacing=10),
             caja,
             _section_insert_row(self._lyrics),
             self._status,
@@ -231,6 +238,7 @@ class NewSongScreen:
         song = parse_lyrics(text, title, detect_chords=self.detect_chords)
         normalize_intro(song)        # toda canción nueva empieza con «Introducción» completa
         song.author = (self._author.value or "").strip() or None
+        song.album = (self._album.value or "").strip() or None
         song.key = (self._key.value or "").strip() or None
         song.original_key = (self._original_key.value or "").strip() or None
         song.rhythm = (self._rhythm.value or "").strip() or None

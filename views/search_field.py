@@ -45,8 +45,9 @@ def search_pill(hint: str, on_change: Callable, trailing: ft.Control | None = No
 
 
 def filter_chip(label: str, on_clear: Callable[[], None],
-                visible: bool = True) -> ft.Container:
-    """Chip del filtro activo, con ✕ para quitarlo."""
+                visible: bool = True, icon: str = ft.Icons.PERSON_OUTLINE) -> ft.Container:
+    """Chip del filtro activo, con ✕ para quitarlo. ``icon`` distingue de qué es el
+    filtro (persona para autor, disco para álbum — ver ``song_list_view``)."""
     return ft.Container(
         visible=visible,
         margin=ft.Margin.only(left=12, right=12, bottom=2),
@@ -54,7 +55,7 @@ def filter_chip(label: str, on_clear: Callable[[], None],
         bgcolor=theme.THEME["chord_bg"], border_radius=20,
         border=ft.Border.all(1, theme.THEME["chord"]),
         content=ft.Row(tight=True, spacing=6, controls=[
-            ft.Icon(ft.Icons.PERSON_OUTLINE, size=15, color=theme.THEME["chord"]),
+            ft.Icon(icon, size=15, color=theme.THEME["chord"]),
             ft.Text(label, size=13, color=theme.THEME["chord"]),
             ft.IconButton(icon=ft.Icons.CLOSE, icon_size=15,
                           icon_color=theme.THEME["text_muted"],
