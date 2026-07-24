@@ -52,6 +52,10 @@ class Song:
     id: int | None
     title: str
     author: str | None = None
+    # Álbum/cancionero al que pertenece (p. ej. "Himnario Adventista"), que puede
+    # agrupar canciones de varios autores. Distinto de `author`: una puede tener
+    # álbum sin autor conocido, o autor sin álbum (canción suelta).
+    album: str | None = None
     # `key` = círculo armónico con el que se toca (guía las sugerencias de acordes).
     # `original_key` = tono original de la canción (informativo). Pueden diferir:
     # p. ej. original La♭ pero se toca en Sol con capo en el 1er traste.

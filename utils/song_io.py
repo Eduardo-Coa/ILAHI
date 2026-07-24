@@ -51,6 +51,7 @@ def song_to_dict(song: Song) -> dict:
         "version": FORMAT_VERSION,
         "title": song.title,
         "author": song.author,
+        "album": song.album,
         "key": song.key,
         "original_key": song.original_key,
         "rhythm": song.rhythm,
@@ -106,6 +107,7 @@ def dict_to_song(data: dict) -> Song:
         id=None,
         title=title.strip(),
         author=_opt_str(data.get("author")),
+        album=_opt_str(data.get("album")),      # opcional en archivos viejos
         key=_opt_str(data.get("key")),
         original_key=_opt_str(data.get("original_key")),   # opcional en archivos viejos
         rhythm=_opt_str(data.get("rhythm")),

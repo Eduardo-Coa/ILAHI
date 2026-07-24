@@ -216,6 +216,7 @@ class Database:
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
                 title      TEXT NOT NULL,
                 author     TEXT,
+                album      TEXT,
                 `key`      TEXT,
                 rhythm       TEXT,
                 bpm          INTEGER,
@@ -304,6 +305,7 @@ class Database:
         self._ensure_column(cur, "songs", "favorite", "INTEGER DEFAULT 0")
         self._ensure_column(cur, "songs", "original_key", "TEXT")
         self._ensure_column(cur, "songs", "bpm", "INTEGER")
+        self._ensure_column(cur, "songs", "album", "TEXT")
         # Índices de las claves foráneas. SQLite NO los crea solo, y sin ellos cargar
         # UNA canción escanea las tablas hijas ENTERAS: el costo de abrir una canción
         # crecía con el tamaño de la biblioteca (medido: 20 ms con 600 himnos, 100 ms
@@ -343,17 +345,17 @@ class Database:
             with self._tx() as cur:
                 if song.id is None:
                     cur.execute(
-                        "INSERT INTO songs (title, author, `key`, original_key, rhythm, bpm, capo, notes) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                        (song.title, song.author, song.key, song.original_key,
+                        "INSERT INTO songs (title, author, album, `key`, original_key, rhythm, bpm, capo, notes) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (song.title, song.author, song.album, song.key, song.original_key,
                          song.rhythm, song.bpm, song.capo, song.notes),
                     )
                     song.id = cur.lastrowid
                 else:
                     cur.execute(
-                        "UPDATE songs SET title=?, author=?, `key`=?, original_key=?, rhythm=?, bpm=?, "
+                        "UPDATE songs SET title=?, author=?, album=?, `key`=?, original_key=?, rhythm=?, bpm=?, "
                         "capo=?, notes=?, updated_at=datetime('now') WHERE id=?",
-                        (song.title, song.author, song.key, song.original_key, song.rhythm, song.bpm,
+                        (song.title, song.author, song.album, song.key, song.original_key, song.rhythm, song.bpm,
                          song.capo, song.notes, song.id),
                     )
                     # Borrar secciones antiguas; el CASCADE elimina líneas/sílabas/acordes
@@ -402,7 +404,7 @@ class Database:
         conn = self._connect()
         cur = conn.cursor()
         cur.execute(
-            "SELECT id, title, author, `key`, original_key, rhythm, bpm, capo, notes "
+            "SELECT id, title, author, album, `key`, original_key, rhythm, bpm, capo, notes "
             "FROM songs WHERE id=?",
             (song_id,),
         )
@@ -414,6 +416,7 @@ class Database:
             id=row["id"],
             title=row["title"],
             author=row["author"],
+            album=row["album"],
             key=row["key"],
             original_key=row["original_key"],
             rhythm=row["rhythm"],

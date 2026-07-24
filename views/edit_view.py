@@ -37,20 +37,39 @@ _ACTION_W = 140       # «Aplicar» y «Quitar», del mismo ancho
 # todo el ancho disponible. Tres caben en la fila (112×3 + espacios).
 _SLOT_W = 112
 
+# Alto del botón flotante «Guardar cambios» (46) + aire abajo (16) + margen antes
+# del contenido (16): lo que hay que reservarle al contenido con scroll para que su
+# último elemento se pueda desplazar por completo por encima del botón.
+_GUARDAR_CLEARANCE = 78
 
-def _themed_field(label: str, value: str = "", width: float | None = None) -> ft.TextField:
-    """Campo de texto con el estilo de la app: relleno y esquinas redondeadas."""
+
+def _themed_field(label: str, value: str = "", width: float | None = None,
+                  expand: bool | int = False) -> ft.TextField:
+    """Campo de texto con el estilo de la app: relleno y esquinas redondeadas.
+
+    ``expand`` reparte el ancho disponible de la fila en partes iguales entre los
+    campos que lo tengan (en vez de un ancho fijo en píxeles): así ninguno se sale
+    de pantalla, sin importar el ancho del teléfono."""
     return ft.TextField(
-        label=label, value=value or "", dense=True, width=width,
+        label=label, value=value or "", dense=True, width=width, expand=expand,
         border_radius=12, filled=True, bgcolor=theme.THEME["surface"],
         border_color=theme.THEME["border"],
         focused_border_color=theme.THEME["accent"],
         color=theme.THEME["text"], cursor_color=theme.THEME["accent"])
 
 
-# Secciones que se pueden insertar con un botón. «Introducción» no está: se
-# antepone sola. «Interludio» crea una sección de casillas de acordes.
-_SECTION_INSERTS = ["Estrofa", "Coro", "Puente", "Interludio", "Final"]
+def _field_section_label(text: str) -> ft.Control:
+    """Separador chico con etiqueta (p. ej. «Tono») antes de un grupo de campos."""
+    return ft.Column(spacing=4, controls=[
+        ft.Text(text, size=12, color=theme.THEME["text_muted"]),
+        ft.Container(height=1, bgcolor=theme.THEME["border"]),
+    ])
+
+
+# Secciones que se pueden insertar con un botón, en una sola fila. «Interludio»
+# crea una sección de casillas de acordes; «Intro» se reconoce igual que
+# «Introducción» al reprocesar (ver ``utils.lyrics_parser``).
+_SECTION_INSERTS = ["Intro", "Estrofa", "Coro", "Interludio"]
 
 
 def _section_insert_row(field: ft.TextField) -> ft.Control:
@@ -93,21 +112,21 @@ def _section_insert_row(field: ft.TextField) -> ft.Control:
             pass
         _safe_update(field)
 
+    # Sin ícono «+»: son 4 en una sola fila, y el texto solo ya deja margen de sobra
+    # (con el ícono, «Interludio» quedaba pegado al borde en pantallas angostas).
     chips = [
         ft.Container(
             ink=True, border_radius=16, on_click=lambda _e, l=label: insert(l),
             padding=ft.Padding.symmetric(horizontal=12, vertical=6),
             bgcolor=theme.THEME["surface"],
             border=ft.Border.all(1, theme.THEME["border"]),
-            content=ft.Row(tight=True, spacing=4, controls=[
-                ft.Icon(ft.Icons.ADD, size=14, color=theme.THEME["chord"]),
-                ft.Text(label, size=12, color=theme.THEME["chord"]),
-            ]))
+            content=ft.Text(label, size=12, color=theme.THEME["chord"]))
         for label in _SECTION_INSERTS
     ]
-    return ft.Column(spacing=6, controls=[
+    return ft.Column(spacing=6, horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                     controls=[
         ft.Text("Insertar sección:", size=11, color=theme.THEME["text_muted"]),
-        ft.Row(chips, wrap=True, spacing=6, run_spacing=6),
+        ft.Row(chips, wrap=False, spacing=6, alignment=ft.MainAxisAlignment.CENTER),
     ])
 
 
@@ -672,12 +691,14 @@ class EditLyricsScreen:
         self.on_saved = on_saved
         self.on_back = on_back
 
-        self._author = _themed_field("Autor", song.author or "")
-        self._key = _themed_field("Tono (círculo)", song.key or "", width=150)
-        self._original_key = _themed_field("Tono original", song.original_key or "", width=150)
-        self._rhythm = _themed_field("Ritmo", song.rhythm or "", width=140)
-        self._bpm = _themed_field("BPM", str(song.bpm or ""), width=90)
-        self._capo = _themed_field("Capo", str(song.capo or 0), width=100)
+        self._title = _themed_field("Título", song.title, expand=True)
+        self._author = _themed_field("Autor", song.author or "", expand=True)
+        self._album = _themed_field("Álbum", song.album or "", expand=True)
+        self._key = _themed_field("Círculo", song.key or "", expand=True)
+        self._original_key = _themed_field("Original", song.original_key or "", expand=True)
+        self._capo = _themed_field("Capo", str(song.capo or 0), expand=True)
+        self._rhythm = _themed_field("Ritmo", song.rhythm or "", expand=True)
+        self._bpm = _themed_field("BPM", str(song.bpm or ""), expand=True)
         self._text = ft.TextField(
             value=reconstruct_lyrics(song), multiline=True, min_lines=8, max_lines=18,
             border=ft.InputBorder.NONE,
@@ -695,24 +716,40 @@ class EditLyricsScreen:
             content=self._text)
         guardar = _pill_button(ft.Icons.CHECK, "Guardar cambios", self._save)
         body = ft.Column([
-            self._author,
-            ft.Row([self._key, self._original_key], spacing=10, wrap=True),
-            ft.Row([self._rhythm, self._bpm, self._capo], spacing=10),
+            self._title,
+            ft.Row([self._author, self._album], spacing=10),
+            _field_section_label("Tono"),
+            ft.Row([self._key, self._original_key, self._capo], spacing=10),
+            ft.Row([self._rhythm, self._bpm], spacing=10),
             ft.Text("Los acordes de las líneas que no cambies se conservan.",
                     size=12, color=theme.THEME["text_muted"]),
             caja,
             _section_insert_row(self._text),
-            guardar,
-        ], spacing=12, scroll=ft.ScrollMode.AUTO, expand=True)
-        return ft.Column([header, ft.Container(content=body, padding=12, expand=True)],
-                         expand=True, spacing=0)
+        ], spacing=12)
+        # «Guardar cambios» flota SOBRE el contenido (``ft.Stack``), igual que el ＋ de
+        # «Añadir»: no reserva su propia fila fija, así que no se ve como un panel
+        # pegado abajo. El padding inferior del contenedor con scroll (``_GUARDAR_CLEARANCE``)
+        # deja que el último elemento se desplace por completo por encima del botón,
+        # para que nunca quede tapado detrás.
+        contenido = ft.Column(expand=True, scroll=ft.ScrollMode.AUTO, controls=[
+            ft.Container(
+                content=body,
+                padding=ft.Padding.only(left=12, right=12, top=12,
+                                        bottom=_GUARDAR_CLEARANCE)),
+        ])
+        flotante = ft.Container(left=12, right=12, bottom=16, content=guardar)
+        pantalla = ft.Stack(expand=True, controls=[contenido, flotante])
+        return ft.Column([header, pantalla], expand=True, spacing=0)
 
     def _save(self, _e=None) -> None:
         merged = merge_lyrics(self.song, self._text.value or "")
         # Al guardar, la canción siempre queda con la «Introducción» completa (2
         # líneas de 5 casillas), aunque el texto la traiga a medias o no la traiga.
         normalize_intro(merged)
+        # Título vacío: se ignora y se conserva el anterior (nunca queda en blanco).
+        merged.title = (self._title.value or "").strip() or merged.title
         merged.author = (self._author.value or "").strip() or None
+        merged.album = (self._album.value or "").strip() or None
         merged.key = (self._key.value or "").strip() or None
         merged.original_key = (self._original_key.value or "").strip() or None
         merged.rhythm = (self._rhythm.value or "").strip() or None

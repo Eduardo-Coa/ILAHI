@@ -681,6 +681,7 @@ def merge_lyrics(existing: Song, new_text: str) -> Song:
     merged = parse_lyrics(new_text, title=existing.title)
     merged.id = existing.id
     merged.author = existing.author
+    merged.album = existing.album
     merged.key = existing.key
     merged.original_key = existing.original_key
     merged.rhythm = existing.rhythm

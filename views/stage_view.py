@@ -1,10 +1,13 @@
 """Vista escenario (Fase 3–5): acordes en color sobre la letra, con transposición
 instantánea, tamaño de fuente, navegación de lista y exportar.
 
-Alineación por LAYOUT (no por fuente monoespaciada): cada sílaba es una columna
-[acorde encima · sílaba debajo]; las palabras se agrupan y la línea hace *wrap*
-por palabra en pantallas angostas. Así el acorde siempre queda sobre su sílaba,
-independientemente de la fuente, y las líneas largas no se recortan.
+Alineación por LAYOUT (no por fuente monoespaciada): cada sílaba es una caja
+CENTRADA [acorde encima · sílaba debajo]; las palabras se agrupan y la línea hace
+*wrap* por palabra en pantallas angostas. Así el acorde siempre queda centrado
+sobre su sílaba, independientemente de la fuente, y las líneas largas no se
+recortan. Cuando el acorde de una sílaba la ensancha más allá de su propia letra,
+se agrega un guion de unión entre ella y la siguiente para que la palabra se siga
+leyendo de corrido (ver ``_word_col``).
 
 Reutiliza la lógica del escritorio sin cambios:
 - ``transposer.display_song``: offset global + modulación por bloque (no destructivo).
@@ -28,69 +31,107 @@ from views.widgets import (back_button, circle_button, title_block,
 import theme
 
 
-# Casilla de acorde SIN letra (un acorde suelto, típicamente al final del verso):
-# un espacio de aire ANTES del guion de apoyo. Va antes y no después para que el
-# hueco quede parejo: con el aire detrás, la PRIMERA casilla se pegaba a la letra
-# («me-») y solo las siguientes se veían separadas. Cada casilla es su propia
-# columna con ``spacing=0``, así que el aire tiene que venir del texto; se usa
-# espacio DURO porque uno normal al borde de un ``Text`` el layout lo puede
-# recortar y no sumaría ancho. El acorde se corre ese mismo espacio para no
-# desalinearse de su guion.
-_SLOT_LEAD = "\u00a0"
-_SLOT_DASH = "-"
+_CONNECTOR = "-"    # guion de unión entre sílabas de una misma palabra (ver _word_col)
 
 
-def _word_chord_lyric(word_syllables: list[Syllable]) -> tuple[str, str]:
-    """(fila_de_acordes, texto) de UNA palabra, con los acordes alineados por carácter
-    dentro de la palabra (así el *wrap* es por palabra y la palabra no se parte).
+def _es_casilla(syl: Syllable) -> bool:
+    """Acorde suelto SIN letra (cambio de acorde a mitad de palabra o frase, sin
+    sílaba nueva). Se dibuja en blanco, con el acorde flotando encima: su propio
+    hueco ya separa visualmente, sin necesidad de un guion ni de rellenar con ``-``."""
+    return bool(syl.chord and syl.chord.value) and not syl.text.strip()
 
-    Cuando dos sílabas seguidas tienen acorde y el primero es más ancho que su sílaba
-    (p. ej. «G#m7» sobre «par»), el segundo acorde se saldría de su sílaba; para que
-    encaje se empuja la sílaba siguiente a la derecha rellenando la letra con guiones
-    (queda «par--tir»). Los guiones se ponen solos, solo cuando hacen falta: con
-    acordes cortos (A, E) no se agrega ninguno."""
-    chord_str = ""
-    lyric_str = ""
-    for syl in word_syllables:
-        value = syl.chord.value if syl.chord else ""
-        # Casilla de acorde sin letra: el aire va ANTES del guion, y se suma a la letra
-        # antes de colocar el acorde para que este arranque en la misma columna que su
-        # guion (si no, quedaría un carácter a la izquierda).
-        es_casilla = bool(value) and not syl.text.strip()
-        if es_casilla:
-            lyric_str += _SLOT_LEAD
-        text = _SLOT_DASH if es_casilla else syl.text
-        if value:
-            # El acorde y su sílaba deben empezar en la misma columna, dejando ≥1
-            # hueco tras el acorde anterior. Si esa columna queda más allá de la letra
-            # actual, se rellena con guiones para que el acorde caiga sobre su sílaba.
-            gap = 1 if (chord_str and not chord_str.endswith(" ")) else 0
-            col = max(len(lyric_str), len(chord_str) + gap)
-            if col > len(lyric_str):
-                lyric_str += "-" * (col - len(lyric_str))
-            chord_str += " " * (col - len(chord_str))
-            chord_str += value
-        lyric_str += text
-    return chord_str.rstrip(), lyric_str
+
+def _es_solo_puntuacion(syl: Syllable) -> bool:
+    """Sílaba que es puro signo (":", ",", "¡", '"'…), sin ninguna letra."""
+    t = syl.text.strip()
+    return bool(t) and not any(ch.isalpha() for ch in t)
+
+
+def _mover_sueltos_tras_puntuacion(syllables: list[Syllable]) -> list[Syllable]:
+    """Un acorde suelto (``_es_casilla``) justo ANTES de un signo de puntuación se
+    corre para caer DESPUÉS de él: el signo cierra la frase anterior, y el acorde
+    nuevo marca el arranque de la que sigue, no el cierre de la que termina. P. ej.
+    en «pujante: "Tu Dios...»: el acorde suelto es el que arranca la cita, así que
+    debe quedar después de los dos puntos, no pegado a «pujante»."""
+    result = list(syllables)
+    i = 0
+    while i < len(result) - 1:
+        if (_es_casilla(result[i]) and result[i + 1].chord is None
+                and _es_solo_puntuacion(result[i + 1])):
+            result[i], result[i + 1] = result[i + 1], result[i]
+            i += 2
+        else:
+            i += 1
+    return result
+
+
+def _ancho_estimado(texto: str, size: int) -> float:
+    """Proxy (no una medida real) del ancho en píxeles de ``texto`` en una fuente
+    monoespaciada al tamaño ``size``: alcanza para decidir si hace falta el guion de
+    unión; el ancho real de cada caja lo resuelve Flet solo al dibujar."""
+    return len(texto) * size
+
+
+def _se_ensancho(syl: Syllable, size: int, chord_size: int) -> bool:
+    """¿El acorde de ``syl`` es más ancho que su propia sílaba?"""
+    value = syl.chord.value if syl.chord else ""
+    return bool(value) and _ancho_estimado(value, chord_size) > _ancho_estimado(syl.text, size)
+
+
+def _syllable_box(syl: Syllable, size: int, chord_size: int,
+                  show_chord: bool, show_lyric: bool) -> ft.Control:
+    """Caja de UNA sílaba: acorde CENTRADO arriba, sílaba CENTRADA abajo. El ancho de
+    la caja lo decide Flet (el mayor entre los dos textos), así que un acorde ancho
+    sobre una sílaba corta queda centrado sobre ella en vez de pegado a la izquierda
+    (que es lo que daba la alineación por columnas de caracteres de antes)."""
+    value = syl.chord.value if syl.chord else ""
+    texto = " " if _es_casilla(syl) else syl.text
+    rows: list[ft.Control] = []
+    if show_chord:
+        rows.append(ft.Text(value or " ", font_family=theme.FONT_MONO, size=chord_size,
+                            weight=ft.FontWeight.BOLD, color=theme.THEME["chord"], no_wrap=True))
+    if show_lyric:
+        rows.append(ft.Text(texto or " ", font_family=theme.FONT_MONO, size=size,
+                            color=theme.THEME["text"], no_wrap=True))
+    return ft.Column(rows, spacing=0, tight=True,
+                     horizontal_alignment=ft.CrossAxisAlignment.CENTER)
+
+
+def _connector_box(size: int, chord_size: int,
+                   show_chord: bool, show_lyric: bool) -> ft.Control:
+    """Guion de unión entre dos sílabas de la misma palabra (ver ``_word_col``)."""
+    rows: list[ft.Control] = []
+    if show_chord:
+        rows.append(ft.Text(" ", size=chord_size, no_wrap=True))
+    if show_lyric:
+        rows.append(ft.Text(_CONNECTOR, font_family=theme.FONT_MONO, size=size,
+                            color=theme.THEME["text"], no_wrap=True))
+    return ft.Column(rows, spacing=0, tight=True,
+                     horizontal_alignment=ft.CrossAxisAlignment.CENTER)
 
 
 def _word_col(word_syllables: list[Syllable], size: int, chord_size: int,
               show_chord: bool = True, show_lyric: bool = True) -> ft.Control:
-    """Columna de una palabra: acordes (monoespaciados) encima, palabra ENTERA debajo.
+    """Fila de una palabra: una caja centrada POR SÍLABA (acorde arriba, letra
+    abajo), con un guion de unión entre dos sílabas cuando el acorde de cualquiera
+    de las dos la ensanchó más allá de su propia letra (nunca al lado de una
+    casilla: ver ``_es_casilla``).
 
     ``show_chord``/``show_lyric`` permiten omitir una fila entera cuando la línea es
     de solo acordes (sin letra) o de solo letra (sin acordes), y así no dejar filas
     en blanco que agrandan el espacio vertical."""
-    chord_str, lyric_str = _word_chord_lyric(word_syllables)
-    rows: list[ft.Control] = []
-    if show_chord:
-        rows.append(ft.Text(chord_str or " ", font_family=theme.FONT_MONO, size=chord_size,
-                            weight=ft.FontWeight.BOLD, color=theme.THEME["chord"], no_wrap=True))
-    if show_lyric:
-        rows.append(ft.Text(lyric_str or " ", font_family=theme.FONT_MONO, size=size,
-                            color=theme.THEME["text"], no_wrap=True))
-    return ft.Column(rows, spacing=0, tight=True,
-                     horizontal_alignment=ft.CrossAxisAlignment.START)
+    celdas: list[ft.Control] = []
+    n = len(word_syllables)
+    for i, syl in enumerate(word_syllables):
+        celdas.append(_syllable_box(syl, size, chord_size, show_chord, show_lyric))
+        if i < n - 1:
+            sig = word_syllables[i + 1]
+            if (not _es_casilla(syl) and not _es_casilla(sig)
+                    and (_se_ensancho(syl, size, chord_size)
+                         or _se_ensancho(sig, size, chord_size))):
+                celdas.append(_connector_box(size, chord_size, show_chord, show_lyric))
+    return ft.Row(celdas, spacing=0, tight=True,
+                  vertical_alignment=ft.CrossAxisAlignment.START)
 
 
 def _group_words(syllables: list[Syllable]) -> list[list[Syllable]]:
@@ -109,11 +150,13 @@ def _group_words(syllables: list[Syllable]) -> list[list[Syllable]]:
 
 
 def _line_block(line: Line, size: int) -> ft.Control:
-    """Un renglón: cada palabra es una columna [acordes / palabra]; *wrap* por palabra.
+    """Un renglón: cada palabra es una fila de cajas [acorde / sílaba]; *wrap* por
+    palabra. Antes de agrupar, los acordes sueltos que caen justo antes de un signo
+    de puntuación se corren para después (ver ``_mover_sueltos_tras_puntuacion``).
 
     Si la línea no tiene acordes se omite la fila de acordes, y si no tiene letra se
     omite la fila de letra (evita renglones en blanco que inflan el espacio)."""
-    syls = line.syllables
+    syls = _mover_sueltos_tras_puntuacion(line.syllables)
     has_chords = any(s.chord for s in syls)
     has_lyric = any(s.text.strip() for s in syls)
     if not has_chords and not has_lyric:

@@ -39,6 +39,18 @@ def test_save_and_load_preserves_content(db):
     assert syllables[2].chord.value == "G"
 
 
+def test_save_and_load_preserves_album(db):
+    song = _sample_song()
+    song.album = "Himnario Adventista"
+    sid = db.save_song(song)
+    assert db.load_song(sid).album == "Himnario Adventista"
+
+
+def test_album_defaults_to_none(db):
+    sid = db.save_song(_sample_song())
+    assert db.load_song(sid).album is None
+
+
 def test_list_songs(db):
     db.save_song(_sample_song())
     songs = db.list_songs()
