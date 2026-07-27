@@ -663,17 +663,64 @@ def key_badge(key: str | None) -> ft.Control:
     )
 
 
-def title_block(title: str, meta: list[str] | None = None) -> list[ft.Control]:
-    """Título centrado y, si hay, la línea de datos (autor · ritmo · capo)."""
+# Deslizamiento de la línea de datos cuando no entra completa (ver ``title_block``).
+_META_ESPERA = 0.9        # s antes de arrancar: da tiempo a leer el título
+_META_IDA = 1400          # ms de ida hasta el final
+_META_PAUSA = 3.0         # s quieto al final, para alcanzar a leer la cola
+_META_VUELTA = 900        # ms de regreso al inicio
+
+
+async def _revelar_meta(fila: ft.Row) -> None:
+    """Muestra la línea de datos entera UNA vez: se desliza hasta el final, espera y
+    vuelve al inicio, donde se queda.
+
+    Va y vuelve (en vez de quedarse al final) porque en reposo tienen que verse los
+    datos de tocar —original, ritmo y capo—, que son los que van adelante; la ida es
+    solo para alcanzar a leer la cola (el autor).
+
+    No hace falta medir el texto: ``scroll_to(offset=-1)`` va al final, y si la línea
+    entra completa no hay nada que desplazar y no se mueve nada. Flet no expone el
+    ancho de un texto, así que cualquier cuenta a mano sería una estimación.
+    """
+    try:
+        await asyncio.sleep(_META_ESPERA)
+        await fila.scroll_to(offset=-1, duration=_META_IDA,
+                             curve=ft.AnimationCurve.EASE_IN_OUT)
+        await asyncio.sleep(_META_PAUSA)
+        await fila.scroll_to(offset=0, duration=_META_VUELTA,
+                             curve=ft.AnimationCurve.EASE_IN_OUT)
+    except Exception:
+        # La pantalla pudo cerrarse a mitad del recorrido: es un adorno, nunca debe
+        # tumbar la vista.
+        pass
+
+
+def title_block(title: str, meta: list[str] | None = None,
+                page: ft.Page | None = None) -> list[ft.Control]:
+    """Título centrado y, si hay, la línea de datos (original · ritmo · capo · autor).
+
+    Con ``page``, esa línea se vuelve desplazable y se desliza sola una vez para que
+    se pueda leer entera aunque no entre (ver ``_revelar_meta``); sin ``page`` queda
+    igual que antes, recortada por la derecha.
+    """
     controls: list[ft.Control] = [
         ft.Text(title, size=18, weight=ft.FontWeight.BOLD,
                 color=theme.THEME["accent"], no_wrap=True,
                 text_align=ft.TextAlign.CENTER),
     ]
     if meta:
-        controls.append(ft.Text(" · ".join(meta), size=12,
-                                color=theme.THEME["text_muted"], no_wrap=True,
-                                text_align=ft.TextAlign.CENTER))
+        linea = ft.Text(" · ".join(meta), size=12,
+                        color=theme.THEME["text_muted"], no_wrap=True,
+                        text_align=ft.TextAlign.CENTER)
+        if page is None:
+            controls.append(linea)
+        else:
+            # ScrollMode.HIDDEN: se puede desplazar (a mano y por código) pero sin
+            # barra a la vista, que aquí sería un adorno feo.
+            fila = ft.Row([linea], spacing=0, scroll=ft.ScrollMode.HIDDEN,
+                          alignment=ft.MainAxisAlignment.CENTER)
+            controls.append(fila)
+            page.run_task(_revelar_meta, fila)
     return controls
 
 

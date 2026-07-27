@@ -257,16 +257,21 @@ _title_block = title_block
 
 
 def _song_meta(song: Song) -> list[str]:
-    """Autor · tono original · ritmo · capo, omitiendo lo que la canción no tenga."""
+    """Tono original · ritmo · capo · autor, omitiendo lo que la canción no tenga.
+
+    El AUTOR va al final a propósito: la línea no siempre entra completa y se recorta
+    por la derecha, así que adelante van los datos que hacen falta para tocar
+    (original, ritmo, capo). El autor se alcanza a leer con el deslizamiento de
+    ``title_block``."""
     meta: list[str] = []
-    if song.author:
-        meta.append(song.author)
     if song.original_key:
         meta.append(f"Original: {song.original_key}")
     if song.rhythm:
         meta.append(f"Ritmo: {song.rhythm}")
     if song.capo:                       # solo si usa capo (capo != 0)
         meta.append(f"Capo: T{song.capo}")
+    if song.author:
+        meta.append(song.author)
     return meta
 
 
@@ -575,8 +580,8 @@ class StageScreen:
         row1 = ft.Row(
             [
                 _back_button(self.on_back),
-                ft.Column(_title_block(self.song.title, meta), spacing=0, tight=True,
-                          expand=True,
+                ft.Column(_title_block(self.song.title, meta, self.page),
+                          spacing=0, tight=True, expand=True,
                           horizontal_alignment=ft.CrossAxisAlignment.CENTER),
                 derecha,
             ],
@@ -795,7 +800,7 @@ class PresentScreen:
                 self.on_next is not None)
         else:
             prev = nxt = ft.Container(width=0)
-        titulo = _title_block(self.song.title, _song_meta(self.song))
+        titulo = _title_block(self.song.title, _song_meta(self.song), self.page)
         if self.position_label:
             titulo = titulo + [ft.Text(self.position_label, size=11,
                                        color=theme.THEME["text_muted"])]
