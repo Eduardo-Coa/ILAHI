@@ -174,7 +174,8 @@ class NewSongScreen:
 
     def __init__(self, db, on_created: Callable[[int], None],
                  on_back: Callable[[], None],
-                 detect_chords: bool = True) -> None:
+                 detect_chords: bool = True,
+                 author: str = "", album: str = "") -> None:
         self.db = db
         self.on_created = on_created
         self.on_back = on_back
@@ -186,9 +187,11 @@ class NewSongScreen:
         # y SIN ``wrap``. La versión anterior usaba ``ft.Row(..., wrap=True)`` en la fila
         # de tono, y en Flet 0.85.3 esa fila rompía el layout: solo se veía el Título y
         # debajo la caja de letra en gris, tapando el resto (autor, tono, Guardar).
+        # ``author``/``album`` vienen rellenos cuando se entra desde la vista de un
+        # autor o de un álbum: la canción nueva ya nace dentro de ese grupo.
         self._title = _themed_field("Título", expand=True)
-        self._author = _themed_field("Autor", expand=True)
-        self._album = _themed_field("Álbum", expand=True)
+        self._author = _themed_field("Autor", author, expand=True)
+        self._album = _themed_field("Álbum", album, expand=True)
         self._key = _themed_field("Círculo", expand=True)
         self._original_key = _themed_field("Original", expand=True)
         self._capo = _themed_field("Capo", value="0", expand=True)

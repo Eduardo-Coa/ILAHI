@@ -579,6 +579,25 @@ class Database:
         cur.execute(sql, params)
         return [dict(row) for row in cur.fetchall()]
 
+    # Campos por los que se AGRUPA una canción (los que tienen vista propia en
+    # «Álbumes»). Whitelist aparte de ``_FILTER_COLUMNS``: aquí se escribe, así que
+    # no queremos que se pueda tocar `key` ni `rhythm` por accidente.
+    _GROUP_COLUMNS = {"author", "album"}
+
+    def set_song_group(self, song_id: int, field: str, value: str | None) -> None:
+        """Asigna el álbum o el autor de una canción (lo usa el ＋ de su vista).
+
+        ``value`` vacío deja el campo en NULL (la saca de ese grupo).
+        """
+        if field not in self._GROUP_COLUMNS:
+            raise ValueError(f"Campo no agrupable: {field}")
+        limpio = (value or "").strip() or None
+        with self._tx("error al asignar %s=%r a la canción %s", field, value, song_id) as cur:
+            cur.execute(
+                f"UPDATE songs SET {field}=?, updated_at=datetime('now') WHERE id=?",
+                (limpio, song_id),
+            )
+
     def set_favorite(self, song_id: int, favorite: bool) -> None:
         """Marca o desmarca una canción como favorita (salen primero en la lista).
 
@@ -849,7 +868,7 @@ class Database:
 
         cur.execute(
             "SELECT ss.id, ss.song_id, ss.position, ss.transpose, "
-            "       so.title, so.`key`, so.author, so.rhythm "
+            "       so.title, so.`key`, so.author, so.album, so.rhythm "
             "FROM setlist_songs ss "
             "JOIN songs so ON so.id = ss.song_id "
             "WHERE ss.setlist_id=? ORDER BY ss.position",
@@ -865,6 +884,7 @@ class Database:
                     title=item_row["title"],
                     key=item_row["key"],
                     author=item_row["author"],
+                    album=item_row["album"],
                     rhythm=item_row["rhythm"],
                 )
             )

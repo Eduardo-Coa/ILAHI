@@ -70,7 +70,8 @@ class SongsScreen:
                  filtro: tuple[str, str] | None = None, embedded: bool = False,
                  external_search: bool = False, query: str = "",
                  on_clear_filter: Callable[[], None] | None = None,
-                 on_data_changed: Callable[[], None] | None = None) -> None:
+                 on_data_changed: Callable[[], None] | None = None,
+                 show_chip: bool = True) -> None:
         self.page = page
         self.db = db
         self.on_open_song = on_open_song
@@ -95,6 +96,9 @@ class SongsScreen:
         # maneja el shell (vuelve a la lista de álbumes/autores), no solo el refill interno.
         self.external_search = external_search
         self.on_clear_filter = on_clear_filter
+        # El chip sobra cuando el nombre del grupo ya está en el encabezado de la
+        # pantalla (la vista propia de un álbum/autor): ahí se apaga con show_chip.
+        self.show_chip = show_chip
         # Aviso de que los datos cambiaron (favorito, borrado). Biblioteca y Favoritos
         # son pantallas distintas y vivas a la vez: sin esto, marcar un favorito aquí
         # no se veía allá hasta reiniciar la app.
@@ -125,7 +129,8 @@ class SongsScreen:
             children.append(logo_header())
         # El chip del filtro va arriba del cuerpo (queda justo debajo del buscador,
         # que embebido es fijo y lo pone el shell).
-        children.append(self._filter_chip_row())
+        if self.show_chip:
+            children.append(self._filter_chip_row())
         if not self.external_search:             # el buscador fijo lo pone el shell
             children.append(self._search_field())
         if not self.embedded:
@@ -227,6 +232,18 @@ class SongsScreen:
         self._query = e.control.value or ""
         self._refill(update=True)
 
+    def browse_song_ids(self) -> list[int]:
+        """Ids del recorrido que hereda la vista de canción para pasar a la anterior o
+        la siguiente (arrastrando o con ‹/›), y del que sale el contador «142/628».
+
+        Es la lista SIN la búsqueda, pero con el resto de sus filtros (la pestaña y el
+        álbum/autor). La búsqueda sirve para ENCONTRAR una canción; una vez abierta se
+        está dentro del álbum, no dentro del resultado: así el contador dice su
+        posición en el himnario y arrastrar lleva al himno que le sigue, no al otro
+        resultado (que estaría cientos de números más allá).
+        """
+        return [s["id"] for s in self._consultar("")]
+
     def _empty_message(self) -> str:
         if self._tab == "favorites" and not self._query:
             return "Aún no tienes favoritos. Toca la ♪ de una canción."
@@ -234,19 +251,31 @@ class SongsScreen:
             return f"(«{self._filtro_etiqueta()}» no tiene canciones que coincidan)"
         return "(sin resultados)"
 
-    def _refill(self, update: bool = True, keep_position: bool = False) -> None:
-        """Relee la base y rearma la ventana visible. ``keep_position`` conserva el
-        punto de scroll (acciones en el lugar, como borrar); una búsqueda o un cambio
-        de pestaña arrancan arriba."""
+    def _consultar(self, query: str) -> list[dict]:
+        """Canciones de esta lista para ``query``, con sus demás filtros aplicados.
+
+        ``exclude_album`` se decide con la búsqueda ACTUAL de la pantalla, no con
+        ``query``: así el recorrido (que consulta con ``query=""``) sigue conteniendo
+        la canción que se abrió desde una búsqueda en Canciones, aunque sea del
+        cancionero incluido. Si se decidiera con ``query``, esa canción quedaría fuera
+        de su propio recorrido y se perdería el contador.
+        """
         filters = {self._filtro[0]: self._filtro[1]} if self._filtro else None
         # El Himnario Adventista no inunda "Canciones" al navegar sin filtro (son 628
         # de las ~635 canciones); en cuanto hay una búsqueda, un filtro activo o se está
         # en Favoritos, sí se busca/muestra ahí también — nada queda inalcanzable.
         exclude_album = (PINNED_ALBUM if self._tab == "library"
                          and not self._query and not self._filtro else None)
-        songs = self.db.list_songs(self._query, filters, exclude_album)   # alfabético
+        songs = self.db.list_songs(query, filters, exclude_album)   # alfabético
         if self._tab == "favorites":
             songs = [s for s in songs if s["favorite"]]
+        return songs
+
+    def _refill(self, update: bool = True, keep_position: bool = False) -> None:
+        """Relee la base y rearma la ventana visible. ``keep_position`` conserva el
+        punto de scroll (acciones en el lugar, como borrar); una búsqueda o un cambio
+        de pestaña arrancan arriba."""
+        songs = self._consultar(self._query)
         self._filler.reset(
             songs, keep_position=keep_position,
             empty=ft.Container(
@@ -279,7 +308,7 @@ class SongsScreen:
             estrella,
             ft.Container(
                 expand=True, ink=True, border_radius=10,
-                on_click=lambda _e: self.on_open_song(sid),
+                on_click=lambda _e: self.on_open_song(sid, self.browse_song_ids()),
                 padding=ft.Padding.symmetric(horizontal=4, vertical=4),
                 content=self._info(song)),
             key_badge(song.get("key")),

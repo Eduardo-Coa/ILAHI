@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from models.song import Song, Section, Line, Syllable, Chord
+from models.setlist import Setlist, SetlistItem
 from database.db import UNKNOWN_AUTHOR, PINNED_ALBUM
 
 
@@ -224,6 +225,46 @@ def test_delete_album_borra_sus_canciones(db):
     assert deleted == 2
     assert len(db.list_songs()) == 1
     assert db.list_songs()[0]["title"] == "C"
+
+
+def test_set_song_group_asigna_album_y_autor(db):
+    sid = db.save_song(Song(id=None, title="Suelta"))
+
+    db.set_song_group(sid, "album", PINNED_ALBUM)
+    db.set_song_group(sid, "author", "Ana Pérez")
+
+    cargada = db.load_song(sid)
+    assert cargada.album == PINNED_ALBUM
+    assert cargada.author == "Ana Pérez"
+
+
+def test_set_song_group_vacio_deja_el_campo_en_null(db):
+    sid = db.save_song(Song(id=None, title="A", album=PINNED_ALBUM))
+    db.set_song_group(sid, "album", "   ")
+    assert db.load_song(sid).album is None
+
+
+def test_set_song_group_rechaza_campos_no_agrupables(db):
+    import pytest
+    sid = db.save_song(Song(id=None, title="A"))
+    with pytest.raises(ValueError):
+        db.set_song_group(sid, "title", "Otro título")
+
+
+def test_la_lista_trae_el_album_de_cada_cancion(db):
+    """Dentro de una lista, una canción del cancionero incluido (sin autor, con
+    álbum) tiene que poder mostrarse por su álbum en vez de «Desconocido»."""
+    sid = db.save_song(Song(id=None, title="Himno", album=PINNED_ALBUM))
+    otro = db.save_song(Song(id=None, title="Suelta", author="Ana Pérez"))
+    setlist = Setlist(id=None, name="Culto", items=[
+        SetlistItem(id=None, song_id=sid, position=0),
+        SetlistItem(id=None, song_id=otro, position=1),
+    ])
+    lid = db.save_setlist(setlist)
+
+    items = db.load_setlist(lid).items
+    assert items[0].author is None and items[0].album == PINNED_ALBUM
+    assert items[1].author == "Ana Pérez" and items[1].album is None
 
 
 def test_migra_himnario_de_author_a_album_al_iniciar(db):

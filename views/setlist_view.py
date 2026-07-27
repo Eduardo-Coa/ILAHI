@@ -254,7 +254,9 @@ class SetlistDetailScreen:
         info = ft.Column([
             ft.Text(item.title, size=16, weight=ft.FontWeight.W_500,
                     color=theme.THEME["text"], no_wrap=True),
-            ft.Text(item.author or "Desconocido", size=12,
+            # Sin autor se cae al ÁLBUM antes que a «Desconocido»: los himnos del
+            # cancionero incluido no tienen autor, y si no se leerían todos igual.
+            ft.Text(item.author or item.album or "Desconocido", size=12,
                     color=theme.THEME["text_muted"], no_wrap=True),
             ft.Row([
                 ft.Icon(ft.Icons.GRAPHIC_EQ, size=12, color=theme.THEME["text_muted"]),
@@ -429,7 +431,7 @@ class SongPickerScreen:
         info = ft.Column([
             ft.Text(song["title"], size=16, weight=ft.FontWeight.W_500,
                     color=theme.THEME["text"], no_wrap=True),
-            ft.Text(song.get("author") or "Desconocido", size=12,
+            ft.Text(song.get("author") or song.get("album") or "Desconocido", size=12,
                     color=theme.THEME["text_muted"], no_wrap=True),
         ], spacing=1, tight=True)
         return list_row_card([

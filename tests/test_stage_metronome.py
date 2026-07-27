@@ -311,6 +311,52 @@ def test_cambiar_la_velocidad_en_pausa_no_relanza_nada():
     assert screen._needs_restart is False
 
 
+def test_tocar_la_pantalla_mientras_toca_marca_relanzar():
+    """Regresión: con el autoscroll activo, tocar la pantalla para ocultar/mostrar el
+    chrome dejaba la letra congelada (el ícono seguía en ⏸).
+
+    El toque cancela la animación nativa —Flutter frena cualquier animación de scroll
+    en cuanto un dedo toca la lista— y ``_on_scroll`` no lo cubría: solo marca el
+    relanzado ante un ARRASTRE (movimiento con el turno del usuario abierto, o un
+    evento USER con dirección), y un toque simple no produce ninguno de los dos.
+    """
+    screen = PresentScreen(_FakePage(), Song(id=16, title="T", sections=[]),
+                           0, on_exit=lambda: None)
+    screen._playing = True
+    screen._needs_restart = False
+
+    screen._toggle_panel()
+
+    assert screen._needs_restart is True
+
+
+def test_tocar_la_pantalla_en_pausa_no_relanza_nada():
+    """Sin reproducir no hay animación que relanzar: tocar solo oculta el chrome."""
+    screen = PresentScreen(_FakePage(), Song(id=17, title="U", sections=[]),
+                           0, on_exit=lambda: None)
+    screen._playing = False
+    screen._needs_restart = False
+
+    screen._toggle_panel()
+
+    assert screen._needs_restart is False
+
+
+def test_tocar_la_pantalla_no_mueve_la_letra():
+    """El toque alterna el chrome y nada más: no debe tocar el scroll (ni reanclarlo),
+    o la letra brincaría bajo el dedo."""
+    screen = PresentScreen(_FakePage(), Song(id=18, title="V", sections=[]),
+                           0, on_exit=lambda: None)
+    screen._body = _RecordingBody()
+    screen._playing = True
+    screen._pixels = 250.0
+
+    screen._toggle_panel()
+
+    assert screen._body.calls == []            # ningún scroll_to
+    assert screen._pixels == 250.0
+
+
 def test_el_toggle_arranca_y_detiene_el_bucle_del_compas():
     """El compás suena en bucle desde el motor de audio; aquí solo se alterna.
 

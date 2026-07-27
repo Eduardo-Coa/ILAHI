@@ -12,10 +12,14 @@ class SetlistItem:
     song_id: int
     position: int
     transpose: int = 0
-    # Datos para mostrar; se llenan al cargar (JOIN con songs), no se persisten aquí
+    # Datos para mostrar; se llenan al cargar (JOIN con songs), no se persisten aquí.
+    # ``album`` acompaña a ``author`` porque una canción puede tener uno u otro: los
+    # himnos del cancionero incluido no llevan autor, y sin el álbum se mostrarían
+    # todos como «Desconocido» dentro de una lista.
     title: str = ""
     key: str | None = None
     author: str | None = None
+    album: str | None = None
     rhythm: str | None = None
 
 

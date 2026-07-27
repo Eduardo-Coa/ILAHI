@@ -278,6 +278,7 @@ class StageScreen:
                  on_prev: Callable[[], None] | None = None,
                  on_next: Callable[[], None] | None = None,
                  position_label: str = "",
+                 nav_buttons: bool = True,
                  on_edit: Callable[[int], None] | None = None,
                  on_edit_lyrics: Callable[[int], None] | None = None,
                  on_present: Callable | None = None,
@@ -291,6 +292,10 @@ class StageScreen:
         self.on_prev = on_prev
         self.on_next = on_next
         self.position_label = position_label
+        # ‹ Anterior / Siguiente › en píldoras. Solo dentro de una LISTA, donde el
+        # orden es algo que armaste y conviene tener a mano. Recorriendo un álbum o
+        # la biblioteca alcanza con arrastrar; ahí se deja únicamente el contador.
+        self.nav_buttons = nav_buttons
         # Exportar vive en el menú ⋮ de la lista de canciones, no aquí.
         self.on_edit = on_edit              # abre el editor de acordes de esta canción
         self.on_edit_lyrics = on_edit_lyrics  # abre el editor de letra
@@ -542,15 +547,21 @@ class StageScreen:
             content=ft.Text(text, size=13, color=color))
 
     def _nav_row(self) -> ft.Control:
-        """Fila anterior/siguiente (en píldoras) para moverse dentro de una lista."""
+        """Posición dentro del recorrido («2/500»), con las píldoras ‹/› solo si esta
+        vista las lleva (``nav_buttons``); si no, queda el contador solo."""
+        controls: list[ft.Control] = [
+            ft.Text(self.position_label, size=12, color=theme.THEME["text_muted"]),
+        ]
+        if self.nav_buttons:
+            controls = [
+                self._nav_pill("‹ Anterior", self.on_prev, self.on_prev is not None),
+                controls[0],
+                self._nav_pill("Siguiente ›", self.on_next, self.on_next is not None),
+            ]
         return ft.Row(
             alignment=ft.MainAxisAlignment.CENTER, spacing=12,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
-            controls=[
-                self._nav_pill("‹ Anterior", self.on_prev, self.on_prev is not None),
-                ft.Text(self.position_label, size=12, color=theme.THEME["text_muted"]),
-                self._nav_pill("Siguiente ›", self.on_next, self.on_next is not None),
-            ],
+            controls=controls,
         )
 
     def _top_bar(self) -> ft.Control:
@@ -573,7 +584,9 @@ class StageScreen:
         )
         # Tono, fuente, editar y escenario viven en los botones flotantes.
         rows: list[ft.Control] = [row1]
-        if self.on_prev is not None or self.on_next is not None:
+        # La fila aparece si hay algo que mostrar: las píldoras, o —cuando están
+        # apagadas— el contador de posición.
+        if self.on_prev is not None or self.on_next is not None or self.position_label:
             rows.append(self._nav_row())
         rows.append(self._status)
         return ft.Container(
@@ -653,6 +666,7 @@ class PresentScreen:
                  on_prev: Callable[[], None] | None = None,
                  on_next: Callable[[], None] | None = None,
                  position_label: str = "",
+                 nav_buttons: bool = True,
                  size: int = theme.SIZE_STAGE) -> None:
         self.page = page
         self.song = song
@@ -661,6 +675,9 @@ class PresentScreen:
         self.on_prev = on_prev        # canción anterior de la lista (None en la 1ª)
         self.on_next = on_next        # canción siguiente de la lista (None en la última)
         self.position_label = position_label
+        # Flechas ‹ › a los lados del título: solo dentro de una LISTA. En un álbum o
+        # en la biblioteca se pasa de canción arrastrando, y queda solo el contador.
+        self.nav_buttons = nav_buttons
         self._chrome_visible = True   # header + panel se ocultan/muestran al tocar
         self._header_box: ft.Control | None = None
         self._panel_box: ft.Control | None = None
@@ -766,13 +783,18 @@ class PresentScreen:
             self.on_next()
 
     def _header(self) -> ft.Control:
-        """Título centrado con ‹ anterior / siguiente › a los lados (para la lista)."""
-        prev = self._nav_button(
-            ft.Icons.CHEVRON_LEFT, lambda _e: self._go_prev(),
-            self.on_prev is not None)
-        nxt = self._nav_button(
-            ft.Icons.CHEVRON_RIGHT, lambda _e: self._go_next(),
-            self.on_next is not None)
+        """Título centrado con ‹ anterior / siguiente › a los lados (solo en una lista;
+        ver ``nav_buttons``). Sin las flechas, el título ocupa todo el ancho y la
+        posición queda bajo él."""
+        if self.nav_buttons:
+            prev = self._nav_button(
+                ft.Icons.CHEVRON_LEFT, lambda _e: self._go_prev(),
+                self.on_prev is not None)
+            nxt = self._nav_button(
+                ft.Icons.CHEVRON_RIGHT, lambda _e: self._go_next(),
+                self.on_next is not None)
+        else:
+            prev = nxt = ft.Container(width=0)
         titulo = _title_block(self.song.title, _song_meta(self.song))
         if self.position_label:
             titulo = titulo + [ft.Text(self.position_label, size=11,
@@ -806,6 +828,15 @@ class PresentScreen:
             if box is not None:
                 box.visible = self._chrome_visible
                 _safe_update(box)
+        # El toque que llegó hasta aquí YA canceló la animación nativa del autoscroll:
+        # Flutter frena cualquier animación de scroll en cuanto un dedo toca la lista.
+        # Y este caso no lo cubre ``_on_scroll``, que solo marca el relanzado ante un
+        # ARRASTRE (movimiento con el turno del usuario abierto, o un evento USER con
+        # dirección); un toque simple no mueve la lista ni trae dirección, así que sin
+        # esto el supervisor se quedaba durmiendo y la letra congelada con el ícono en
+        # ⏸. Aquí sabemos con certeza que hubo un toque: se pide relanzar.
+        if self._playing:
+            self._needs_restart = True
 
     def _swipe_reset(self, _e=None) -> None:
         self._swipe_dx = 0.0
