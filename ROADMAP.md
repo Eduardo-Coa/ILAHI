@@ -275,8 +275,24 @@ al final, para empaquetar el APK.
       escribe en `/sdcard/Download/` (requiere `src_bytes`, ver Fase 5).
 - [x] Verificado en emulador: inicio (tarjetas + favorito + menú ⋮), vista escenario
       (acordes alineados), modo escenario, importar y exportar.
-- [ ] Falta: ícono de la app; edición (teclado) y setlists (drag) en el emulador; teléfono
-      real. Quitar la traza `[present] error scroll_to`.
+- [x] **Corre en teléfono real** (HONOR Magic5 Lite, `com.eduardocoa.hymnchords`), con la
+      biblioteca de verdad: 630 canciones, 2 listas y los favoritos.
+- [x] **Rename a Ilahi verificado on-device (29 jul 2026)**: `adb install -r` sobre la
+      versión vieja → `migrate_legacy_db_files()` renombró `hymnchords.db` (+ `-wal`/`-shm`)
+      a `ilahi.db` sin perder nada (630 canciones antes y después, contrastado con un
+      `.hymnbak` exportado justo antes). El picker nativo **sí deja seleccionar `.ilahi`**
+      (el caveat de extensión no registrada no aplica) y también los `.hymnchords` viejos;
+      se importaron ambos y luego se borraron las copias de prueba.
+- [x] **Empaquetado limpio (29 jul 2026)**: Flet solo excluye `build/` por defecto, así
+      que el APK se llevaba dentro `.venv/` (49,6 MB), `storage/` con la base de
+      desarrollo y todos los respaldos (58,7 MB) y `.git/` (8 MB) — 116 de los 120 MB
+      del payload, y la biblioteca de canciones viajaba dentro del archivo. Se añadió
+      `[tool.flet.app] exclude` en `pyproject.toml`: payload **120 MB → 1,58 MB** y APK
+      **116,6 MB → 67,5 MB**. Verificado que los 35 archivos que la app necesita siguen
+      dentro y que arranca con la biblioteca intacta. `assets/` NO se excluye (ícono,
+      logo y clicks del metrónomo se leen en runtime).
+- [ ] Falta: edición (teclado) y setlists (drag) en el emulador.
+      Quitar la traza `[present] error scroll_to`.
 
 ## Spikes de riesgo (validar temprano)
 

@@ -26,6 +26,33 @@ copyright = "Copyright (C) 2026 Eduardo Coa"
 # negro). La imagen sale de assets/splash.png y splash_dark.png (copias de
 # Ilahi-claro.png, RGBA transparente). Sin esta config, Flet usaría el ícono sobre un
 # fondo claro por defecto. icon_bgcolor negrea también el splash breve de Android 12+.
+# Qué NO se empaqueta dentro del APK. Flet solo excluye `build/` por defecto, así que
+# sin esta lista el .apk se lleva el entorno virtual, el repositorio git y la carpeta
+# `storage/` con la base de desarrollo y TODOS los respaldos: unos 116 MB de los 120
+# del payload, y además la biblioteca de canciones viajaría dentro del archivo que uno
+# comparte. Ojo: `assets/` NO va aquí (el ícono, el logo y los clicks del metrónomo se
+# leen en tiempo de ejecución), y tampoco `sample_data.py` ni `theme.py`, que main.py
+# importa. `flet_template/` se lee del proyecto al compilar, no del paquete.
+[tool.flet.app]
+exclude = [
+    ".venv",
+    ".git",
+    ".github",
+    "storage",          # base de desarrollo + respaldos (lo más pesado)
+    "tests",
+    "ui_lab",           # maquetas de interfaz, solo desarrollo
+    "tools",            # scripts de desarrollo (reseed, íconos)
+    "flet_template",    # plantilla de build, no hace falta en tiempo de ejecución
+    ".pytest_cache",
+    "__pycache__",
+    ".claude",
+    ".gitignore",
+    "pytest.ini",
+    "requirements-dev.txt",
+    "ROADMAP.md",
+    "README.md",
+]
+
 [tool.flet.splash]
 color = "#000000"
 dark_color = "#000000"
