@@ -22,7 +22,7 @@ from sample_data import sample_songs, sample_setlist
 from utils.song_text import line_to_chord_lyric
 
 # En escritorio, `flet run` define FLET_APP_STORAGE_DATA -> <proyecto>/storage/data.
-DB_PATH = PROJ / "storage" / "data" / "hymnchords.db"
+DB_PATH = PROJ / "storage" / "data" / "ilahi.db"
 
 
 def main() -> None:

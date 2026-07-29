@@ -149,3 +149,19 @@ class BaseFalsa:
 
     def delete_song(self, song_id: int) -> None:
         self._songs = [s for s in self._songs if s["id"] != song_id]
+
+    def save_song(self, song) -> int:
+        """Guardado falso: asigna un id y recuerda lo básico en memoria (el lab no
+        persiste). Devuelve el id, como la base real, para que los flujos que guardan
+        (p. ej. Nueva canción) no revienten."""
+        new_id = max((s["id"] for s in self._songs), default=0) + 1
+        self._songs.append({
+            "id": new_id,
+            "title": getattr(song, "title", "") or "",
+            "author": getattr(song, "author", None),
+            "album": getattr(song, "album", None),
+            "key": getattr(song, "key", None),
+            "rhythm": getattr(song, "rhythm", None),
+            "favorite": 0,
+        })
+        return new_id

@@ -19,8 +19,10 @@ from utils.lyrics_parser import (parse_lyrics, merge_lyrics, is_chord_line,
                                  normalize_intro)
 from utils.metronome import valid_bpm
 from utils.song_text import SECTION_LABELS
+from utils.web_import import import_song, SongImportError, ImportedSong
 from views.widgets import (back_button, centered_header, floating_panel,
-                           square_button, wrap_lyric_line, _safe_update)
+                           square_button, wrap_lyric_line, _safe_update,
+                           LYRIC_ALIGN_DEFAULT, lyric_row_alignment)
 import theme
 
 _PUNCT = set(",.;:!¡?¿…\"'()-—«»")
@@ -175,7 +177,8 @@ class NewSongScreen:
     def __init__(self, db, on_created: Callable[[int], None],
                  on_back: Callable[[], None],
                  detect_chords: bool = True,
-                 author: str = "", album: str = "") -> None:
+                 author: str = "", album: str = "",
+                 title: str = "", lyrics: str = "") -> None:
         self.db = db
         self.on_created = on_created
         self.on_back = on_back
@@ -189,7 +192,9 @@ class NewSongScreen:
         # debajo la caja de letra en gris, tapando el resto (autor, tono, Guardar).
         # ``author``/``album`` vienen rellenos cuando se entra desde la vista de un
         # autor o de un álbum: la canción nueva ya nace dentro de ese grupo.
-        self._title = _themed_field("Título", expand=True)
+        # ``title``/``lyrics`` vienen rellenos al importar desde un enlace (Cifra Club):
+        # la pantalla se abre con la canción ya cargada, lista para revisar y guardar.
+        self._title = _themed_field("Título", title, expand=True)
         self._author = _themed_field("Autor", author, expand=True)
         self._album = _themed_field("Álbum", album, expand=True)
         self._key = _themed_field("Círculo", expand=True)
@@ -198,6 +203,7 @@ class NewSongScreen:
         self._rhythm = _themed_field("Ritmo", expand=True)
         self._bpm = _themed_field("BPM", expand=True)
         self._lyrics = ft.TextField(
+            value=lyrics,
             hint_text="Pega aquí la letra (y acordes, si tienes)…", multiline=True,
             # Mismo alto que «Editar letra»: arranca en 8 líneas y crece hasta 18.
             min_lines=8, max_lines=18, border=ft.InputBorder.NONE,
@@ -259,6 +265,77 @@ class NewSongScreen:
 
 
 # ---------------------------------------------------------------------------
+# Importar desde un enlace (Cifra Club)
+# ---------------------------------------------------------------------------
+
+class ImportLinkScreen:
+    """Pega un enlace de Cifra Club → baja y extrae → entrega un ``ImportedSong``.
+
+    No guarda ni arma la canción: al terminar bien llama ``on_imported(imported)``, y
+    el que llama (main) abre ``NewSongScreen`` ya rellenada para revisar. El bajado va
+    en un hilo aparte para no congelar la UI mientras gira el indicador."""
+
+    def __init__(self, on_imported: Callable[["ImportedSong"], None],
+                 on_back: Callable[[], None], page) -> None:
+        self.on_imported = on_imported
+        self.on_back = on_back
+        self.page = page
+        self._field = _themed_field("Enlace de la canción (Cifra Club)", expand=True)
+        self._status = ft.Text("", size=13, color=theme.THEME["text_muted"])
+        self._ring = ft.ProgressRing(width=18, height=18, visible=False,
+                                     color=theme.THEME["accent"])
+        self._button = _pill_button(ft.Icons.DOWNLOAD, "Importar", self._start)
+
+    def build(self) -> ft.Control:
+        header = centered_header("Importar desde enlace",
+                                 left=back_button(self.on_back))
+        cuerpo = ft.Column(spacing=14, controls=[
+            ft.Text("Pega el enlace de una canción de Cifra Club. La bajamos y la "
+                    "abrimos en el editor para que la revises antes de guardar.",
+                    size=13, color=theme.THEME["text_muted"]),
+            self._field,
+            ft.Row([self._ring, self._status], spacing=8,
+                   vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            self._button,
+        ])
+        return ft.Column([header, ft.Container(content=cuerpo, padding=16, expand=True)],
+                         expand=True, spacing=0)
+
+    def _set_status(self, texto: str, error: bool = False) -> None:
+        self._status.value = texto
+        self._status.color = theme.THEME["danger"] if error else theme.THEME["text_muted"]
+        _safe_update(self._status)
+
+    def _busy(self, on: bool) -> None:
+        self._ring.visible = on
+        self._button.disabled = on
+        _safe_update(self._ring)
+        _safe_update(self._button)
+
+    def _start(self, _e=None) -> None:
+        self._busy(True)
+        self._set_status("Importando…")
+        self.page.run_task(self._download, (self._field.value or "").strip())
+
+    async def _download(self, url: str) -> None:
+        import asyncio
+        try:
+            # import_song es bloqueante (urllib): va a un hilo para no congelar la UI.
+            imported = await asyncio.get_event_loop().run_in_executor(
+                None, import_song, url)
+        except SongImportError as e:
+            self._busy(False)
+            self._set_status(e.message, error=True)
+            return
+        except Exception:
+            self._busy(False)
+            self._set_status("No se pudo importar. Revisa el enlace y tu conexión.",
+                             error=True)
+            return
+        self.on_imported(imported)
+
+
+# ---------------------------------------------------------------------------
 # Editar canción (asignar acordes tocando sílabas)
 # ---------------------------------------------------------------------------
 
@@ -267,12 +344,16 @@ class EditSongScreen:
 
     def __init__(self, db, song: Song, on_back: Callable[[], None],
                  on_edit_lyrics: Callable[[int], None] | None = None,
-                 page: ft.Page | None = None) -> None:
+                 page: ft.Page | None = None,
+                 align: str = LYRIC_ALIGN_DEFAULT) -> None:
         self.db = db
         self.song = song
         self.on_back = on_back
         self.on_edit_lyrics = on_edit_lyrics
         self.page = page
+        # Alineación de la letra: la misma preferencia de app que usa la vista de
+        # canción (se elige allá, en el botón «Aa»). Aquí solo se respeta.
+        self.align = align
         self._selected: Syllable | None = None
         self._size = 20
         self._chord_size = 15
@@ -348,7 +429,7 @@ class EditSongScreen:
                     blocks.append(ft.Row(
                         [self._intro_cell(s, section) for s in line.syllables],
                         wrap=True, spacing=0, run_spacing=2,
-                        alignment=ft.MainAxisAlignment.CENTER,      # centrada, como el escenario
+                        alignment=lyric_row_alignment(self.align),
                         vertical_alignment=ft.CrossAxisAlignment.START))
                     continue
                 if not any(s.text.strip() or s.chord for s in line.syllables):
@@ -363,7 +444,7 @@ class EditSongScreen:
                         for word in _group_words(part)
                     ]
                     blocks.append(ft.Row(word_rows, wrap=True, spacing=0, run_spacing=2,
-                                         alignment=ft.MainAxisAlignment.CENTER,   # letra centrada
+                                         alignment=lyric_row_alignment(self.align),
                                          vertical_alignment=ft.CrossAxisAlignment.START))
         self._grid.controls = blocks
         _safe_update(self._grid)
@@ -433,7 +514,9 @@ class EditSongScreen:
             content=ft.Column(
                 [top, ft.Text(syl.text or " ", size=self._size,
                               color=theme.THEME["text"], no_wrap=True)],
-                spacing=0, tight=True, horizontal_alignment=ft.CrossAxisAlignment.START),
+                # CENTRADO sobre la sílaba, igual que en la vista de canción; antes
+                # iba pegado a la izquierda y las dos vistas no coincidían.
+                spacing=0, tight=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
             on_click=(lambda _e, s=syl: self._select(s)) if assignable else None,
             padding=ft.Padding.symmetric(horizontal=2),
             border_radius=4,

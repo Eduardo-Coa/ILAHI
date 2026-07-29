@@ -1,4 +1,4 @@
-# Dependencias de runtime de HymnChords móvil (Flet).
+# Dependencias de runtime de Ilahi móvil (Flet).
 #
 # La lógica (models/, utils/, database/db.py) es Python de la biblioteca estándar,
 # copiada de la app de escritorio: NO depende de Flet y se prueba con pytest sin UI.

@@ -1,4 +1,4 @@
-"""Modelos de datos en memoria para HymnChords."""
+"""Modelos de datos en memoria para Ilahi."""
 
 from __future__ import annotations
 from dataclasses import dataclass, field

@@ -27,7 +27,9 @@ from utils.song_text import SECTION_LABELS
 from utils.lyrics_parser import is_chord_line
 from views.widgets import (back_button, circle_button, title_block,
                            square_button, wrap_lyric_line, sheet_option,
-                           _safe_update, sheet_dialog, stepper_row)
+                           _safe_update, sheet_dialog, stepper_row,
+                           LYRIC_ALIGNMENTS, LYRIC_ALIGN_DEFAULT,
+                           lyric_row_alignment)
 import theme
 
 
@@ -149,7 +151,7 @@ def _group_words(syllables: list[Syllable]) -> list[list[Syllable]]:
     return words
 
 
-def _line_block(line: Line, size: int) -> ft.Control:
+def _line_block(line: Line, size: int, align: str = LYRIC_ALIGN_DEFAULT) -> ft.Control:
     """Un renglón: cada palabra es una fila de cajas [acorde / sílaba]; *wrap* por
     palabra. Antes de agrupar, los acordes sueltos que caen justo antes de un signo
     de puntuación se corren para después (ver ``_mover_sueltos_tras_puntuacion``).
@@ -167,12 +169,13 @@ def _line_block(line: Line, size: int) -> ft.Control:
     return ft.Container(
         padding=ft.Padding.only(bottom=3),
         content=ft.Row(cols, wrap=True, spacing=0, run_spacing=2,
-                       alignment=ft.MainAxisAlignment.CENTER,
+                       alignment=lyric_row_alignment(align),
                        vertical_alignment=ft.CrossAxisAlignment.START),
     )
 
 
-def _intro_line_block(line: Line, size: int) -> ft.Control:
+def _intro_line_block(line: Line, size: int,
+                      align: str = LYRIC_ALIGN_DEFAULT) -> ft.Control:
     """Renglón de la «Introducción»: casillas mostradas como guiones monoespaciados,
     con el acorde encima de la casilla que lo tenga (si no hay ninguno, solo guiones)."""
     has_chords = any(s.chord for s in line.syllables)
@@ -194,7 +197,7 @@ def _intro_line_block(line: Line, size: int) -> ft.Control:
     return ft.Container(
         padding=ft.Padding.only(bottom=3),
         content=ft.Row(cols, wrap=True, spacing=0, run_spacing=2,
-                       alignment=ft.MainAxisAlignment.CENTER,
+                       alignment=lyric_row_alignment(align),
                        vertical_alignment=ft.CrossAxisAlignment.START))
 
 
@@ -202,11 +205,13 @@ def _intro_line_block(line: Line, size: int) -> ft.Control:
 _BODY_SIDE_PAD = 32
 
 
-def stage_body_from(disp: Song, size: int, page_width: float | None = None) -> list[ft.Control]:
+def stage_body_from(disp: Song, size: int, page_width: float | None = None,
+                    align: str = LYRIC_ALIGN_DEFAULT) -> list[ft.Control]:
     """Controles del cuerpo a partir de una canción YA transpuesta (``display_song``).
 
     ``page_width`` (ancho de pantalla) permite partir los renglones de letra largos
-    por puntuación antes de que Flet los corte a mitad de frase."""
+    por puntuación antes de que Flet los corte a mitad de frase. ``align`` es la
+    alineación de la letra elegida en el botón «Aa» (ver ``LYRIC_ALIGNMENTS``)."""
     avail = (page_width or 400) - _BODY_SIDE_PAD
     blocks: list[ft.Control] = []
     for section in disp.sections:
@@ -214,7 +219,9 @@ def stage_body_from(disp: Song, size: int, page_width: float | None = None) -> l
         if label:
             blocks.append(ft.Container(
                 padding=ft.Padding.only(top=8, bottom=1),
-                alignment=ft.Alignment.CENTER,        # etiqueta centrada como la letra
+                # SIEMPRE centrada, aunque la letra vaya a la izquierda: la etiqueta
+                # separa bloques, no es texto que se lea de corrido.
+                alignment=ft.Alignment.CENTER,
                 content=ft.Text(label.upper(), size=theme.SIZE_SECTION,
                                 color=theme.THEME["section_label"]),
             ))
@@ -225,11 +232,12 @@ def stage_body_from(disp: Song, size: int, page_width: float | None = None) -> l
             # sección: antes se descartaban fuera de la intro y solo se veía su
             # encabezado.
             if is_chord_line(line):
-                blocks.append(_intro_line_block(line, size))
+                blocks.append(_intro_line_block(line, size, align))
             else:
                 for part in wrap_lyric_line(line.syllables, size, avail):
                     blocks.append(_line_block(
-                        Line(id=line.id, position=line.position, syllables=part), size))
+                        Line(id=line.id, position=line.position, syllables=part),
+                        size, align))
     return blocks
 
 
@@ -290,7 +298,9 @@ class StageScreen:
                  on_persist_key: Callable | None = None,
                  on_offset_change: Callable[[int], None] | None = None,
                  size: int = theme.SIZE_STAGE,
-                 on_size_change: Callable[[int], None] | None = None) -> None:
+                 on_size_change: Callable[[int], None] | None = None,
+                 align: str = LYRIC_ALIGN_DEFAULT,
+                 on_align_change: Callable[[str], None] | None = None) -> None:
         self.page = page
         self.song = song
         self.on_back = on_back
@@ -318,6 +328,10 @@ class StageScreen:
         # preferencias (lo inyecta ``main``); sin él, el cambio dura la sesión.
         self.size = size
         self.on_size_change = on_size_change
+        # Alineación de la letra: como el tamaño, se ajusta desde el «Aa» y vale para
+        # TODA la app (``on_align_change`` la persiste; lo inyecta ``main``).
+        self.align = align
+        self.on_align_change = on_align_change
         self._swipe_dx = 0.0                # distancia acumulada del arrastre lateral
         # Los botones flotan a la derecha en columna (van en un Stack): 3 botones de
         # 60 + 2×12 de espacio + 24 de margen ≈ 228. El hueco inferior deja que la
@@ -433,7 +447,8 @@ class StageScreen:
         self.page.show_dialog(dialog)
 
     def _open_font_sheet(self) -> None:
-        """Cuadro «Tamaño del texto»: A− · número · A+ · Restablecer."""
+        """Cuadro del «Aa»: tamaño del texto (A− · número · A+ · Restablecer) y
+        alineación de la letra. Las dos cosas son de la APP, no de la canción."""
         self._size_text = ft.Text(str(self.size), size=26, weight=ft.FontWeight.BOLD,
                                   color=theme.THEME["text"])
         dialog = sheet_dialog(
@@ -445,14 +460,47 @@ class StageScreen:
                 stepper_row("A−", lambda _e: self._resize(-2), self._size_text,
                             "A+", lambda _e: self._resize(2)),
                 ft.TextButton("Restablecer", on_click=lambda _e: self._reset_size()),
+                ft.Container(height=1, bgcolor=theme.THEME["border"]),
+                ft.Text("Alineación de la letra", size=16, color=theme.THEME["text"]),
+                ft.Row(spacing=10, controls=[self._align_pill(clave)
+                                             for clave in LYRIC_ALIGNMENTS]),
+                ft.Text("Se aplica a todas las canciones", size=11,
+                        color=theme.THEME["text_muted"]),
             ]),
         )
         self.page.show_dialog(dialog)
 
+    def _align_pill(self, clave: str) -> ft.Control:
+        """Una opción de alineación; la activa va con el color del acorde."""
+        etiqueta, icono = LYRIC_ALIGNMENTS[clave]
+        activa = self.align == clave
+        color = theme.THEME["chord"] if activa else theme.THEME["text_muted"]
+        return ft.Container(
+            expand=True, ink=True, border_radius=14, height=44,
+            alignment=ft.Alignment.CENTER,
+            on_click=lambda _e, c=clave: self._set_align(c),
+            bgcolor=theme.THEME["chord_bg"] if activa else theme.THEME["surface"],
+            border=ft.Border.all(
+                1, theme.THEME["chord"] if activa else theme.THEME["border"]),
+            content=ft.Row(tight=True, spacing=6,
+                           alignment=ft.MainAxisAlignment.CENTER, controls=[
+                ft.Icon(icono, size=18, color=color),
+                ft.Text(etiqueta, size=13,
+                        color=color if activa else theme.THEME["text"]),
+            ]))
+
+    def _set_align(self, clave: str) -> None:
+        """Cambia la alineación, la persiste y repinta la letra."""
+        self.align = clave
+        if self.on_align_change is not None:
+            self.on_align_change(clave)      # queda guardada para toda la app
+        self.page.pop_dialog()
+        self._refresh()
+
     def _refresh(self, update: bool = True) -> None:
         """Recalcula la canción mostrada al offset actual y repinta el cuerpo."""
         disp = display_song(self.song, self.offset)
-        self._body.controls = stage_body_from(disp, self.size, self.page.width)
+        self._body.controls = stage_body_from(disp, self.size, self.page.width, self.align)
         clave = disp.key or "—"
         self._fab_key.value = clave
         if self._tone_key is not None:
@@ -659,9 +707,9 @@ class PresentScreen:
     """Modo escenario: SOLO la canción (limpio, sin barra de herramientas), con
     **autoscroll** (play/pausa + velocidad) y el metrónomo si la canción trae BPM.
 
-    El tamaño del texto se hereda de la vista de canción (parámetro ``size``, que
-    viene de su botón «Aa»): aquí no se edita, para tener un solo lugar donde se
-    ajusta la fuente.
+    El tamaño del texto y la alineación de la letra se heredan de la vista de canción
+    (``size`` y ``align``, los dos del botón «Aa»): aquí no se editan, para tener un
+    solo lugar donde se ajustan.
 
     En temas oscuros el fondo es **negro puro** (no el del tema); en claros, el
     fondo del tema (ver ``_stage_bg``)."""
@@ -672,9 +720,11 @@ class PresentScreen:
                  on_next: Callable[[], None] | None = None,
                  position_label: str = "",
                  nav_buttons: bool = True,
-                 size: int = theme.SIZE_STAGE) -> None:
+                 size: int = theme.SIZE_STAGE,
+                 align: str = LYRIC_ALIGN_DEFAULT) -> None:
         self.page = page
         self.song = song
+        self.align = align            # alineación de la letra, heredada del «Aa»
         self.offset = offset          # tono con el que se venía viendo
         self.on_exit = on_exit
         self.on_prev = on_prev        # canción anterior de la lista (None en la 1ª)
@@ -923,7 +973,7 @@ class PresentScreen:
 
     def _refresh(self) -> None:
         disp = display_song(self.song, self.offset)
-        self._body.controls = stage_body_from(disp, self.size, self.page.width)
+        self._body.controls = stage_body_from(disp, self.size, self.page.width, self.align)
         _safe_update(self._body)
 
     # ------------------------------------------------------------------

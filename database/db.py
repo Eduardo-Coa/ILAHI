@@ -1,4 +1,4 @@
-"""Acceso a la base de datos SQLite para HymnChords."""
+"""Acceso a la base de datos SQLite para Ilahi."""
 
 from __future__ import annotations
 import logging
@@ -8,11 +8,11 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
-from database.config import DBConfig
+from database.config import DBConfig, BACKUP_PREFIX
 from models.song import Song, Section, Line, Syllable, Chord
 from models.setlist import Setlist, SetlistItem
 
-_log = logging.getLogger("hymnchords.db")
+_log = logging.getLogger("ilahi.db")
 
 # Número de copias de seguridad a conservar (rotación).
 BACKUP_KEEP = 10
@@ -114,10 +114,10 @@ class Database:
         backups_dir.mkdir(parents=True, exist_ok=True)
 
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        dest_path = backups_dir / f"hymnchords-{stamp}.db"
+        dest_path = backups_dir / f"{BACKUP_PREFIX}{stamp}.db"
         n = 1
         while dest_path.exists():  # evita colisiones dentro del mismo segundo
-            dest_path = backups_dir / f"hymnchords-{stamp}-{n}.db"
+            dest_path = backups_dir / f"{BACKUP_PREFIX}{stamp}-{n}.db"
             n += 1
 
         try:
@@ -139,7 +139,7 @@ class Database:
     def _prune_backups(backups_dir: Path) -> None:
         """Conserva solo las últimas ``BACKUP_KEEP`` copias (por fecha de modificación)."""
         backups = sorted(
-            backups_dir.glob("hymnchords-*.db"), key=lambda p: p.stat().st_mtime
+            backups_dir.glob(f"{BACKUP_PREFIX}*.db"), key=lambda p: p.stat().st_mtime
         )
         for old in backups[:-BACKUP_KEEP]:
             old.unlink(missing_ok=True)

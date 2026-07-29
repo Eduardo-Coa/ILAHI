@@ -24,11 +24,15 @@ from database.db import author_display, PINNED_ALBUM
 
 
 def show_add_sheet(page, on_new: Callable[[], None], on_import: Callable,
-                   on_export_all: Callable) -> None:
-    """Cuadro flotante «Añadir»: nueva canción · importar · exportar biblioteca.
+                   on_export_all: Callable,
+                   on_import_link: Callable[[], None] | None = None) -> None:
+    """Cuadro flotante «Añadir»: nueva canción · importar desde enlace · importar
+    archivo · exportar biblioteca.
 
     Vive a nivel de módulo (no en la pantalla) porque el botón ＋ ahora es fijo del
-    shell y lo comparten Canciones y Favoritos; el shell lo abre desde aquí."""
+    shell y lo comparten Canciones y Favoritos; el shell lo abre desde aquí.
+    ``on_import_link`` (importar desde un enlace de Cifra Club) es opcional para no
+    obligar a los llamadores que no lo usan."""
     async def do_import(_e=None) -> None:
         page.pop_dialog()
         await on_import()
@@ -41,17 +45,28 @@ def show_add_sheet(page, on_new: Callable[[], None], on_import: Callable,
         page.pop_dialog()
         on_new()
 
+    def do_import_link(_e=None) -> None:
+        page.pop_dialog()
+        on_import_link()
+
+    opciones = [
+        _sheet_option(ft.Icons.ADD, "Nueva canción",
+                      "Escribe o pega la letra", do_new),
+    ]
+    if on_import_link is not None:
+        opciones.append(_sheet_option(
+            ft.Icons.LINK, "Importar desde enlace",
+            "Pega el link de una canción de Cifra Club", do_import_link))
+    opciones += [
+        _sheet_option(ft.Icons.DOWNLOAD, "Importar…",
+                      "Una canción o un cancionero .ilahi", do_import),
+        _sheet_option(ft.Icons.UPLOAD, "Exportar biblioteca",
+                      "Todas tus canciones en un archivo", do_export_all),
+    ]
     page.show_dialog(sheet_dialog(
         title="Añadir",
         content_padding=ft.Padding.only(left=8, right=8, bottom=8),
-        content=ft.Column(tight=True, spacing=2, controls=[
-            _sheet_option(ft.Icons.ADD, "Nueva canción",
-                          "Escribe o pega la letra", do_new),
-            _sheet_option(ft.Icons.DOWNLOAD, "Importar…",
-                          "Una canción o un cancionero .hymnchords", do_import),
-            _sheet_option(ft.Icons.UPLOAD, "Exportar biblioteca",
-                          "Todas tus canciones en un archivo", do_export_all),
-        ]),
+        content=ft.Column(tight=True, spacing=2, controls=opciones),
     ))
 
 

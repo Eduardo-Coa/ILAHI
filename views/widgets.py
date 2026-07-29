@@ -32,6 +32,24 @@ _CONFIRM_CARD_PADDING = ft.Padding.symmetric(horizontal=16, vertical=10)
 SONG_ROW_HEIGHT = 72
 SONG_ROW_EXTENT = SONG_ROW_HEIGHT + 10
 
+# Alineación de la letra, elegida desde el botón «Aa» de la vista de canción. Es una
+# preferencia de la APP (vale para todas las canciones, ver ``utils/prefs.py``) y la
+# comparten la vista de canción, el escenario y la rejilla de edición de acordes.
+# Las etiquetas de sección NO la siguen: van siempre centradas, porque separan
+# bloques en vez de ser texto que se lee de corrido.
+LYRIC_ALIGNMENTS: dict[str, tuple[str, str]] = {
+    "left":   ("Izquierda", ft.Icons.FORMAT_ALIGN_LEFT),
+    "center": ("Centrar", ft.Icons.FORMAT_ALIGN_CENTER),
+}
+LYRIC_ALIGN_DEFAULT = "center"
+
+
+def lyric_row_alignment(align: str | None) -> ft.MainAxisAlignment:
+    """Cómo se alinea una fila de palabras. Tolera un valor desconocido (de un archivo
+    de preferencias viejo o editado a mano) cayendo al centrado de siempre."""
+    return (ft.MainAxisAlignment.START if align == "left"
+            else ft.MainAxisAlignment.CENTER)
+
 
 # Diagnóstico de la lista: si ILAHI_DEBUG_LIST apunta a un archivo, la ventana
 # deslizante deja ahí su rastro (posición, ventana calculada, alto declarado por

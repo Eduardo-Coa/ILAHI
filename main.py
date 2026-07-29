@@ -1,6 +1,6 @@
-"""Punto de entrada de HymnChords móvil (Flet).
+"""Punto de entrada de Ilahi móvil (Flet).
 
-Fase 5: importar/exportar `.hymnchords` (el puente con el escritorio, sin nube).
+Fase 5: importar/exportar `.ilahi` (el puente con el escritorio, sin nube).
 Reutiliza `utils.song_io` (canción suelta o cancionero/bundle). El FilePicker de
 Flet 0.85 es un servicio con métodos async que devuelven el resultado directo.
 
@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 import flet as ft
 
-from database.config import load_config
+from database.config import load_config, migrate_legacy_db_files
 from database.db import Database, UNKNOWN_AUTHOR, author_display
 from models.transposer import transpose_song
 import theme
@@ -27,15 +27,17 @@ from views.album_detail_view import (EntryDetailScreen, AddToEntryScreen,
                                      show_add_to_entry_sheet, campo_de)
 from views.setlist_view import build_setlists, SetlistDetailScreen, SongPickerScreen
 from views.stage_view import StageScreen, PresentScreen
-from views.edit_view import NewSongScreen, EditSongScreen, EditLyricsScreen
+from views.edit_view import (NewSongScreen, EditSongScreen, EditLyricsScreen,
+                             ImportLinkScreen)
 from views.settings_view import SettingsScreen
 from views.theme_editor import ThemeEditorScreen
 from views.main_shell import MainShell, HOME_INDEX
-from views.widgets import show_toast, confirm_dialog, sheet_dialog
+from views.widgets import (show_toast, confirm_dialog, sheet_dialog,
+                           LYRIC_ALIGNMENTS, LYRIC_ALIGN_DEFAULT)
 from utils.prefs import get_pref, set_pref
 from utils.song_io import (
     load_songs, song_to_bytes, bundle_to_bytes, suggested_filename,
-    bundle_filename, SONG_FILE_EXTENSION, SongIOError,
+    bundle_filename, SONG_FILE_EXTENSION, LEGACY_FILE_EXTENSION, SongIOError,
 )
 
 try:
@@ -62,6 +64,14 @@ def posicion_en_recorrido(recorrido, song_id: int) -> tuple[int | None, int, str
 
 def bootstrap_db() -> Database:
     """Abre la BD (carpeta aislada), crea el esquema y siembra ejemplos si falta."""
+    # Antes que nada: si la carpeta trae los archivos con el nombre viejo
+    # (hymnchords.db), renombrarlos. Tiene que ir antes del logging y de abrir la
+    # BD, porque un archivo ya abierto no se puede renombrar. Sin esto, la app
+    # abriría una base vacía y re-sembraría las canciones de ejemplo.
+    try:
+        migrate_legacy_db_files()
+    except Exception:                 # una migración fallida nunca impide arrancar
+        pass
     if setup_logging is not None:
         try:
             setup_logging()
@@ -80,7 +90,8 @@ def bootstrap_db() -> Database:
 
 
 # Extensión de la copia de seguridad COMPLETA (SQLite): distinta de la del cancionero
-# (.hymnchords, solo canciones) para no confundir un backup con un cancionero.
+# (.ilahi, solo canciones) para no confundir un backup con un cancionero. Se mantiene
+# ".hymnbak" al renombrar la app para no invalidar las copias ya guardadas.
 BACKUP_EXTENSION = ".hymnbak"
 
 
@@ -110,6 +121,20 @@ def main(page: ft.Page) -> None:
         nonlocal stage_size
         stage_size = size
         set_pref("stage_size", size)
+
+    # Alineación de la letra (botón «Aa»): vale para TODAS las canciones y para las
+    # dos pantallas que las muestran (la de canción y la rejilla de acordes). Se
+    # valida al leerla: una preferencia de otra versión o editada a mano no debe
+    # dejar la letra en un estado raro.
+    lyric_align = get_pref("lyric_align", LYRIC_ALIGN_DEFAULT)
+    if lyric_align not in LYRIC_ALIGNMENTS:
+        lyric_align = LYRIC_ALIGN_DEFAULT
+
+    def save_lyric_align(align: str) -> None:
+        """Recuerda la alineación entre vistas y entre sesiones."""
+        nonlocal lyric_align
+        lyric_align = align
+        set_pref("lyric_align", align)
 
     # «Detectar acordes al pegar» (Ajustes): si está apagado, al pegar letra nueva no se
     # interpretan las líneas de acordes. Por defecto encendido.
@@ -231,12 +256,17 @@ def main(page: ft.Page) -> None:
         page.add(ft.SafeArea(content=control, expand=True))
 
     # ------------------------------------------------------------------
-    # Importar / exportar (.hymnchords) — FilePicker async de Flet 0.85
+    # Importar / exportar (.ilahi) — FilePicker async de Flet 0.85
     # ------------------------------------------------------------------
     async def do_import(_e=None) -> None:
+        # Se ofrecen las dos extensiones: los archivos exportados cuando la app se
+        # llamaba HymnChords tienen que seguir siendo seleccionables en el picker
+        # nativo (el contenido lo acepta song_io por el formato heredado).
         files = await file_picker.pick_files(
-            dialog_title="Importar .hymnchords",
-            allowed_extensions=["hymnchords"], allow_multiple=False)
+            dialog_title="Importar .ilahi",
+            allowed_extensions=[SONG_FILE_EXTENSION.lstrip("."),
+                                LEGACY_FILE_EXTENSION.lstrip(".")],
+            allow_multiple=False)
         if not files:
             return
         try:
@@ -309,7 +339,7 @@ def main(page: ft.Page) -> None:
 
     # ------------------------------------------------------------------
     # Copia de seguridad completa (Ajustes › Datos): toda la base en un archivo
-    # ``.hymnbak`` (SQLite). Distinto del cancionero ``.hymnchords`, que solo lleva
+    # ``.hymnbak`` (SQLite). Distinto del cancionero ``.ilahi``, que solo lleva
     # canciones: el backup incluye también listas y favoritos, y restaurar REEMPLAZA.
     # ------------------------------------------------------------------
     async def do_export_backup() -> None:
@@ -319,7 +349,7 @@ def main(page: ft.Page) -> None:
         except Exception as ex:                       # snapshot fallido: nunca reventar
             show_toast(page, f"✗ No se pudo preparar la copia: {ex}")
             return
-        name = f"hymnchords-backup-{datetime.now():%Y%m%d-%H%M}{BACKUP_EXTENSION}"
+        name = f"ilahi-backup-{datetime.now():%Y%m%d-%H%M}{BACKUP_EXTENSION}"
         try:
             msg = await save_bytes(
                 data, "Exportar copia de seguridad", name, ext=BACKUP_EXTENSION,
@@ -481,11 +511,28 @@ def main(page: ft.Page) -> None:
         return None
 
     def open_add_sheet(volver=None) -> None:
-        """Cuadro «Añadir» (nueva canción / importar / exportar), desde el ＋ del shell.
+        """Cuadro «Añadir» (nueva canción / importar enlace / importar archivo /
+        exportar), desde el ＋ del shell.
 
         ``volver`` es la vista desde la que se tocó el ＋: cancelar la canción nueva
         regresa ahí y no al panel principal."""
-        show_add_sheet(page, lambda: go_new_song(volver), do_import, do_export_all)
+        show_add_sheet(page, lambda: go_new_song(volver), do_import, do_export_all,
+                       on_import_link=lambda: go_import_link(volver))
+
+    def go_import_link(volver=None) -> None:
+        """Pantalla para pegar un enlace de Cifra Club; al importar bien, abre «Nueva
+        canción» ya rellenada con lo que trajo el enlace."""
+        atras = volver or go_home
+
+        def abrir_rellenada(imported) -> None:
+            show(NewSongScreen(db, on_created=go_edit_song, on_back=atras,
+                               detect_chords=detect_chords,
+                               title=imported.title, author=imported.artist,
+                               lyrics=imported.text).build(),
+                 on_back=atras)
+
+        show(ImportLinkScreen(on_imported=abrir_rellenada, on_back=atras,
+                              page=page).build(), on_back=atras)
 
     def fab_action(i: int):
         """Qué hace el ＋ fijo por vista: en Canciones/Favoritos abre «Añadir»; en
@@ -574,7 +621,7 @@ def main(page: ft.Page) -> None:
         song = db.load_song(song_id)
         show(EditSongScreen(db, song, on_back=volver,
                             on_edit_lyrics=lambda sid: go_edit_lyrics(sid, on_done),
-                            page=page).build(), on_back=volver)
+                            page=page, align=lyric_align).build(), on_back=volver)
 
     def go_edit_lyrics(song_id: int, on_done=None) -> None:
         volver = lambda: go_edit_song(song_id, on_done)
@@ -612,7 +659,8 @@ def main(page: ft.Page) -> None:
                          on_present=lambda s, o, size=None: go_present(
                              s, o, size, volver, recorrido),
                          on_persist_key=persist_transpose,
-                         size=stage_size, on_size_change=save_stage_size).build(),
+                         size=stage_size, on_size_change=save_stage_size,
+                         align=lyric_align, on_align_change=save_lyric_align).build(),
              on_back=atras)
 
     def go_present(song, offset: int, size: int | None = None,
@@ -631,7 +679,8 @@ def main(page: ft.Page) -> None:
         screen = PresentScreen(page, song, offset, on_exit=volver,
                                on_prev=on_prev, on_next=on_next,
                                position_label=etiqueta, nav_buttons=False,
-                               size=size if size is not None else stage_size)
+                               size=size if size is not None else stage_size,
+                               align=lyric_align)
         # on_leave: al abandonar el escenario (incluido el «atrás» del sistema) se
         # detiene el metrónomo/autoscroll, que si no seguían en la pantalla anterior.
         show(screen.build(), on_back=volver, on_leave=screen.stop)
@@ -704,6 +753,7 @@ def main(page: ft.Page) -> None:
             # El 3er argumento es el tamaño de fuente que trae esta vista («Aa»).
             on_present=lambda s, o, size: go_present_in_setlist(setlist, index, size),
             size=stage_size, on_size_change=save_stage_size,
+            align=lyric_align, on_align_change=save_lyric_align,
         ).build(), on_back=lambda: go_setlist_detail(setlist.id))
 
     def go_present_in_setlist(setlist, index: int,

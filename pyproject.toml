@@ -1,7 +1,12 @@
 [project]
+# OJO: `name` NO se renombra a "ilahi" aunque la app ya se llame así. De aquí sale
+# el id de paquete de Android (com.eduardocoa.hymnchords): cambiarlo hace que el
+# teléfono la trate como una app DISTINTA — se instalaría al lado de la actual y la
+# biblioteca guardada en la carpeta privada de la vieja quedaría inaccesible. El
+# nombre visible bajo el ícono lo da `product`, más abajo, y ya dice Ilahi.
 name = "hymnchords"
 version = "1.0.0"
-description = "HymnChords — cifrado y acordes para guitarristas de iglesia"
+description = "Ilahi — cifrado y acordes para guitarristas de iglesia"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [

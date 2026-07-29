@@ -1,6 +1,6 @@
-# HymnChords Mobile
+# Ilahi Mobile
 
-Port a Android (teléfono) de la app de escritorio **HymnChords**, construido con
+Port a Android (teléfono) de la app de escritorio **Ilahi**, construido con
 [Flet](https://flet.dev) (Python + Flutter). Reutiliza intacta la lógica de la
 versión de escritorio (silabificador, transpositor, parser de acordes, base de
 datos SQLite) y reescribe solo la interfaz para pantalla táctil.

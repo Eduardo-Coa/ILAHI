@@ -9,7 +9,7 @@ las sílabas NO llevan espacio; la ÚLTIMA sílaba de cada palabra (salvo la úl
 la línea) lleva un espacio al final. Así ``line_to_chord_lyric`` reproduce la letra
 con sus espacios y alinea cada acorde sobre su sílaba.
 
-La base de datos de desarrollo vive en una carpeta propia ('HymnChordsMobile'),
+La base de datos de desarrollo vive en una carpeta propia ('IlahiMobile'),
 separada de la app de escritorio, así que sembrar aquí nunca toca datos reales.
 """
 

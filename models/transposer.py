@@ -1,4 +1,4 @@
-"""Lógica de transposición de acordes para HymnChords.
+"""Lógica de transposición de acordes para Ilahi.
 
 La transposición es *consciente del tono*: el acorde resultante se deletrea con
 bemoles o sostenidos según la tonalidad de destino (en Fa el IV es "Bb", en Mi

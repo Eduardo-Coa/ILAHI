@@ -11,6 +11,7 @@ __pycache__/
 *.db
 *.db-journal
 storage/
+.ilahimobile/
 .hymnchordsmobile/
 
 # Artefactos de build de Flet / Flutter (solo el build/ del root; NO flet_template/build,

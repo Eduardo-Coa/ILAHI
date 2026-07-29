@@ -1,6 +1,6 @@
-# ROADMAP — HymnChords Mobile (Flet → Android)
+# ROADMAP — Ilahi Mobile (Flet → Android)
 
-Port de la app de escritorio HymnChords a un APK de Android usando **Flet**
+Port de la app de escritorio Ilahi a un APK de Android usando **Flet**
 (Python + Flutter). Doc vivo: se marca el avance por fase.
 
 ## Decisiones tomadas
@@ -8,11 +8,19 @@ Port de la app de escritorio HymnChords a un APK de Android usando **Flet**
 - **Framework:** Flet (Python + Flutter). Reutiliza toda la lógica Python y sus
   tests; UI nueva. `flet build apk` corre nativo en Windows (sin WSL/Docker).
 - **Alcance v1 (MVP completo):** ver + tocar en vivo, setlists, importar/exportar
-  `.hymnchords`, y edición en el teléfono.
+  `.ilahi`, y edición en el teléfono.
 - **Protección del escritorio:** todo vive en `HymnChords apk` (repo aparte). La
   lógica se **copia** (vendoriza), no se comparte. Cero cambios en la app original.
-- **Datos aislados en desarrollo:** la app móvil usa la carpeta `HymnChordsMobile`
-  (no `HymnChords`), para nunca tocar la base real del escritorio.
+- **Datos aislados en desarrollo:** la app móvil usa la carpeta `IlahiMobile`
+  (no `Ilahi`), para nunca tocar la base real del escritorio.
+- **Renombrado a Ilahi (2026-07-29):** cambian el formato (`ilahi-song` /
+  `ilahi-bundle`), la extensión (`.ilahi`) y los nombres de base, log y respaldos
+  (`ilahi.db`, `ilahi.log`, `ilahi-*.db`), con lectura de los viejos. **NO cambia
+  `[project] name = "hymnchords"`** en `pyproject.toml`: de ahí sale el id de
+  paquete de Android (`com.eduardocoa.hymnchords`), y tocarlo instalaría una app
+  nueva al lado, dejando inaccesible la biblioteca del teléfono. El nombre visible
+  bajo el ícono ya es "Ilahi" (`product`). Por lo mismo el APK sigue saliendo como
+  `hymnchords.apk`, y la extensión de las copias completas sigue siendo `.hymnbak`.
 
 ## Estrategia
 
@@ -118,7 +126,7 @@ al final, para empaquetar el APK.
 - [x] **Reordenar arrastrando** (`ft.ReorderableListView` / `on_reorder`) en lugar de ▲▼.
 - Validado headless: filtro/buscador, reorder, y crear/renombrar/quitar persisten en SQLite.
 
-### Fase 5 — Importar / Exportar `.hymnchords`  ✅ COMPLETA (escritorio + Android)
+### Fase 5 — Importar / Exportar `.ilahi`  ✅ COMPLETA (escritorio + Android)
 - [x] Importar (canción suelta o cancionero) con FilePicker → `load_songs` → `save_song`.
 - [x] Exportar todo como cancionero (`export_bundle`) y exportar canción desde el escenario.
 - [x] FilePicker de Flet 0.85 (servicio async: `await pick_files/save_file`) + estado en UI.
